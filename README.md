@@ -37,9 +37,22 @@ FEATHERLESS_API_KEY=your_featherless_api_key_here
 
 ---
 
-## Dataset & Few-Shot Prompting Configuration ⚠️ IMPORTANT
+---
 
-This pipeline utilizes **Few-Shot Prompting** to provide the Vision Agent with baseline examples of "Real" and "Fake" data. However, for this to work on your local machine, **you must download the dataset and configure the correct absolute path in the backend.**
+## The Dataset: Chubb_Data
+
+This project was built and validated against a custom dataset of roughly 500 files, encompassing a mix of genuine claims and AI-generated fraud.
+
+- **Classes**: The dataset is split into two primary ground truth labels: `Real` and `Fake` (AI Generated).
+- **Media Types**: Each class contains subdirectories for different media formats:
+  - `Images/` (Car accidents, Property Damage)
+  - `Documents/` (Fraudulent invoices, manipulated repair estimates)
+  - `Video/` (Dashcam footage, CCTV recordings)
+- **Generative Sources**: The fake dataset contains high-quality generations from tools like Midjourney, DALL-E, and various deepfake/video generation models designed specifically to test the limits of modern fraud detection.
+
+## Few-Shot Prompting Configuration ⚠️ IMPORTANT
+
+This pipeline utilizes **Few-Shot Prompting** to provide the Vision Agent with baseline examples of the "Real" and "Fake" data described above. However, for this to work on your local machine, **you must download the dataset and configure the correct absolute path in the backend.**
 
 ### Step 1: Download the Dataset
 Download the `Chubb_Data` dataset from the following Google Drive link:
