@@ -64,6 +64,46 @@ def get_few_shot_examples():
 
 ---
 
+## Technical Architecture & APIs
+
+This project avoids locking into a single AI provider by utilizing high-performance API routing services.
+
+### OpenRouter Integration
+We use **[OpenRouter](https://openrouter.ai/)** as our primary API gateway. OpenRouter allows us to seamlessly hot-swap industry-leading models without changing our fundamental API implementation. 
+- **Vision Agent**: Powered by `qwen/qwen-vl-plus` via OpenRouter for state-of-the-art forensic image and structural analysis.
+- **Critic Agents**: We route our text analysis through OpenRouter to highly capable LLMs like `qwen/qwen-turbo` and `google/gemini-2.5-pro` (GLM 4.6 equivalent) for the jury voting process.
+
+### Featherless AI Integration
+To ensure complete independence in the jury process, one of our three Critic Agents is routed through **[Featherless AI](https://featherless.ai/)**, a specialized provider for high-performance open-source models. 
+- **DeepSeek R1-0528** is deployed via Featherless AI Serverless Endpoints. This guarantees that at least one voter in the ensemble is evaluating the evidence through an entirely different cognitive architecture and hosting environment, preventing API-level "groupthink" or correlated failures.
+
+---
+
+## Project Structure
+
+```text
+multimodal-fraud-detector/
+├── backend/
+│   ├── app.py                     # Legacy FastAPI router (optional usage)
+│   ├── qwen_agent.py              # The core Brain: Vision & Critic LLM prompts and API calls
+│   ├── evaluate_fake_images.py    # Standalone script for testing
+│   └── evaluate_real_images.py    # Standalone script for testing
+├── database/
+│   ├── init_db.py                 # Crawls the Chubb_Data directory and initializes the SQLite DB
+│   ├── batch_processor.py         # Autonomous script that runs inference on unanalyzed DB records
+│   ├── export_to_csv.py           # Generates stakeholder reports from the active SQLite DB
+│   ├── import_eval_results.py     # Integrates external team evaluation results into the DB
+│   └── fraud_detection.db         # The local SQLite state database (Generated post-init)
+├── frontend/
+│   └── app.py                     # The Streamlit Dashboard (Uploads, Batch UI, Database Viewer)
+├── test_video.py                  # Utility for testing individual video frame extraction
+├── .env                           # API Keys (Gitignored)
+├── requirements.txt               # Dependencies
+└── README.md                      # Documentation
+```
+
+---
+
 ## Usage
 
 ### 1. Initialize the Database
