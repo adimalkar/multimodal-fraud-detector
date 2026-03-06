@@ -2,8 +2,11 @@ import streamlit as st
 import os
 import sys
 
-# Add the parent directory to sys.path so we can import 'backend'
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Critical fix for Streamlit Community Cloud
+# Streamlit Cloud mounts the repo at /mount/src/<repo_name>
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 import json
 import time
