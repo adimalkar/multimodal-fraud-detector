@@ -4,8 +4,9 @@ import glob
 from datetime import datetime
 
 # Configuration
-DB_PATH = "/home/aditya/Downloads/Hackathon/database/fraud_detection.db"
-DATA_DIR = "/home/aditya/Downloads/Hackathon/Chubb_Data"
+base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DB_PATH = os.path.join(base_dir, "database", "fraud_detection.db")
+DATA_DIR = os.path.join(base_dir, "Chubb_Data")
 
 def init_db():
     print(f"Initializing database at: {DB_PATH}")
