@@ -2,11 +2,9 @@ import streamlit as st
 import os
 import sys
 
-# Critical fix for Streamlit Community Cloud
-# Streamlit Cloud mounts the repo at /mount/src/<repo_name>
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
+import streamlit as st
+import os
+import sys
 
 import json
 import time
@@ -17,7 +15,7 @@ from PIL import Image
 from backend.qwen_agent import analyze_media, analyze_video
 
 # Database path
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "fraud_detection.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "database", "fraud_detection.db")
 
 # ==========================================
 # PAGE CONFIG & STYLING
