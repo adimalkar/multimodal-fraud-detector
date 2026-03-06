@@ -1,6 +1,10 @@
 import streamlit as st
 import os
 import sys
+
+# Add the parent directory to sys.path so we can import 'backend'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import json
 import time
 import tempfile
@@ -24,140 +28,230 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
 
-    .main { background-color: #0e1117; }
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+    /* Global */
+    .main { 
+        background-color: #030712; 
+        background-image: 
+            radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.04) 0%, transparent 25%),
+            radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.04) 0%, transparent 25%);
+    }
+    html, body, [class*="css"] { font-family: 'Outfit', sans-serif; }
+
+    /* Streamlit overrides */
+    div[data-testid="stSidebar"] {
+        background-color: rgba(15, 23, 42, 0.95) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    
+    .stButton > button {
+        background: linear-gradient(135deg, #38bdf8 0%, #3b82f6 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-weight: 600;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 14px 0 rgba(59, 130, 246, 0.25);
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+    }
 
     /* Hero header */
     .hero-title {
-        font-size: 2.8rem;
+        font-size: 3.5rem;
         font-weight: 900;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #e0e7ff 0%, #38bdf8 50%, #8b5cf6 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 0.25rem;
+        letter-spacing: -0.02em;
     }
     .hero-subtitle {
-        font-size: 1.1rem;
-        color: #8b95a5;
-        margin-bottom: 2rem;
+        font-size: 1.25rem;
+        color: #94a3b8;
+        margin-bottom: 2.5rem;
+        font-weight: 300;
     }
 
-    /* Cards */
+    /* Cards - Glassmorphism */
     .verdict-card {
-        border-radius: 16px;
-        padding: 24px;
+        border-radius: 20px;
+        padding: 32px;
         text-align: center;
-        margin-bottom: 16px;
-        border: 1px solid rgba(255,255,255,0.06);
+        margin-bottom: 24px;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);    
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
     }
     .verdict-fake {
-        background: linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(220,38,38,0.08) 100%);
-        border-color: rgba(239,68,68,0.3);
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(0, 0, 0, 0.4) 100%);
+        border-top: 1px solid rgba(239, 68, 68, 0.3);
     }
     .verdict-real {
-        background: linear-gradient(135deg, rgba(34,197,94,0.15) 0%, rgba(22,163,74,0.08) 100%);
-        border-color: rgba(34,197,94,0.3);
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(0, 0, 0, 0.4) 100%);
+        border-top: 1px solid rgba(16, 185, 129, 0.3);
     }
     .verdict-label {
-        font-size: 0.75rem;
-        font-weight: 600;
+        font-size: 0.8rem;
+        font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: #8b95a5;
-        margin-bottom: 4px;
+        letter-spacing: 0.15em;
+        color: #cbd5e1;
+        margin-bottom: 8px;
     }
     .verdict-value-fake {
-        font-size: 2.5rem;
+        font-size: 3.5rem;
         font-weight: 900;
-        color: #ef4444;
+        color: #f87171;
+        text-shadow: 0 0 20px rgba(248, 113, 113, 0.3);
+        letter-spacing: -0.02em;
     }
     .verdict-value-real {
-        font-size: 2.5rem;
+        font-size: 3.5rem;
         font-weight: 900;
-        color: #22c55e;
+        color: #34d399;
+        text-shadow: 0 0 20px rgba(52, 211, 153, 0.3);
+        letter-spacing: -0.02em;
     }
 
     /* Confidence bar */
     .conf-bar-bg {
-        background: rgba(255,255,255,0.06);
-        border-radius: 8px;
-        height: 12px;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 12px;
+        height: 16px;
         overflow: hidden;
-        margin: 8px 0 16px 0;
+        margin: 12px 0 24px 0;
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
     }
     .conf-bar-fill-fake {
         height: 100%;
-        border-radius: 8px;
-        background: linear-gradient(90deg, #ef4444, #dc2626);
+        border-radius: 12px;
+        background: linear-gradient(90deg, #f43f5e, #e11d48);
+        box-shadow: 0 0 10px rgba(244, 63, 94, 0.5);
     }
     .conf-bar-fill-real {
         height: 100%;
-        border-radius: 8px;
-        background: linear-gradient(90deg, #22c55e, #16a34a);
+        border-radius: 12px;
+        background: linear-gradient(90deg, #10b981, #059669);
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
     }
 
     /* Stats row */
     .stat-card {
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 12px;
-        padding: 16px;
+        background: rgba(30, 41, 59, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(8px);
+        border-radius: 16px;
+        padding: 24px 16px;
         text-align: center;
+        transition: transform 0.2s ease;
+    }
+    .stat-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(255, 255, 255, 0.1);
     }
     .stat-value {
-        font-size: 1.8rem;
+        font-size: 2rem;
         font-weight: 800;
-        color: #e2e8f0;
+        color: #f8fafc;
+        margin-bottom: 4px;
     }
     .stat-label {
         font-size: 0.75rem;
-        font-weight: 500;
-        color: #64748b;
+        font-weight: 600;
+        color: #94a3b8;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.1em;
     }
 
     /* Vote chips */
     .vote-chip {
-        display: inline-block;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-size: 0.8rem;
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 16px;
+        border-radius: 100px;
+        font-size: 0.85rem;
         font-weight: 600;
-        margin: 4px;
+        margin: 6px 6px 12px 0;
+        border: 1px solid rgba(255,255,255,0.05);
+        backdrop-filter: blur(4px);
     }
-    .vote-fake { background: rgba(239,68,68,0.15); color: #ef4444; }
-    .vote-real { background: rgba(34,197,94,0.15); color: #22c55e; }
-    .vote-error { background: rgba(234,179,8,0.15); color: #eab308; }
+    .vote-fake { background: rgba(239, 68, 68, 0.1); color: #fca5a5; border-color: rgba(239, 68, 68, 0.2); }
+    .vote-real { background: rgba(16, 185, 129, 0.1); color: #6ee7b7; border-color: rgba(16, 185, 129, 0.2); }
+    .vote-error { background: rgba(245, 158, 11, 0.1); color: #fcd34d; border-color: rgba(245, 158, 11, 0.2); }
 
     /* Upload area */
     .stFileUploader > div > div {
-        border: 2px dashed rgba(102,126,234,0.3) !important;
-        border-radius: 12px !important;
-        background: rgba(102,126,234,0.03) !important;
+        border: 2px dashed rgba(56, 189, 248, 0.3) !important;
+        border-radius: 16px !important;
+        background: rgba(56, 189, 248, 0.02) !important;
+        transition: all 0.2s ease;
+    }
+    .stFileUploader > div > div:hover {
+        border-color: rgba(56, 189, 248, 0.6) !important;
+        background: rgba(56, 189, 248, 0.05) !important;
     }
 
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
+        gap: 12px;
+        background: rgba(15, 23, 42, 0.4);
+        padding: 8px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
     }
     .stTabs [data-baseweb="tab"] {
         border-radius: 8px;
-        padding: 8px 20px;
+        padding: 10px 24px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+    }
+    .stTabs [aria-selected="true"] {
+        background: rgba(255, 255, 255, 0.1) !important;
+        color: white !important;
+    }
+    
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background: rgba(30, 41, 59, 0.4) !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
     }
 
     /* Pipeline badge */
     .pipeline-badge {
-        background: rgba(102,126,234,0.1);
-        border: 1px solid rgba(102,126,234,0.2);
-        border-radius: 8px;
-        padding: 8px 16px;
-        font-size: 0.8rem;
-        color: #667eea;
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.1), rgba(139, 92, 246, 0.1));
+        border: 1px solid rgba(139, 92, 246, 0.2);
+        border-radius: 20px;
+        padding: 10px 20px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #bae6fd;
+        display: inline-flex;
+        align-items: center;
+        margin-bottom: 24px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    /* Animations */
+    @keyframes blink {
+        0%, 100% { opacity: 0.3; transform: scale(0.8); }
+        50% { opacity: 1; transform: scale(1.2); }
+        
+    }
+    @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+    }
+    .pulsing-icon {
         display: inline-block;
-        margin-bottom: 16px;
+        animation: float 3s ease-in-out infinite;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -208,6 +302,11 @@ def render_result(result, filename, elapsed_time):
     </div>
     """, unsafe_allow_html=True)
 
+    # Executive Summary (Prominent layout)
+    if reason:
+        st.markdown("#### 📋 Executive Summary")
+        st.info(reason)
+
     # Stats row
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -233,11 +332,8 @@ def render_result(result, filename, elapsed_time):
         st.markdown(chips_html, unsafe_allow_html=True)
 
     # Expandable details
-    with st.expander("👁️ Vision Agent Forensic Report", expanded=False):
+    with st.expander("👁️ Raw Vision Agent Forensics (Technical)", expanded=False):
         st.markdown(vision_findings)
-
-    with st.expander("📝 Full Reasoning", expanded=False):
-        st.write(reason)
 
     if calibration:
         with st.expander("⚖️ Confidence Calibration (What would change my mind?)", expanded=False):
@@ -295,8 +391,8 @@ with st.sidebar:
         cursor.execute("SELECT COUNT(*) FROM evidence WHERE is_processed = 1")
         processed = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM evidence WHERE is_processed = 1 AND ai_prediction = ground_truth")
-        correct = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM evidence WHERE is_processed = 1 AND ai_prediction = 'Fake'")
+        flagged_fraud = float(cursor.fetchone()[0])
 
         cursor.execute("SELECT COUNT(*) FROM evidence WHERE media_type = 'Document'")
         doc_count = cursor.fetchone()[0]
@@ -309,11 +405,16 @@ with st.sidebar:
 
         conn.close()
 
-        accuracy = (correct / processed * 100) if processed > 0 else 0
+        fraud_rate = (flagged_fraud / processed * 100) if processed > 0 else 0
+        progress_val = float(processed / total) if total > 0 else 0.0
 
         st.metric("Total Records", total)
-        st.metric("Processed", f"{processed}/{total}")
-        st.metric("Accuracy", f"{accuracy:.1f}%")
+        
+        st.markdown(f"<div style='font-size: 0.85rem; color: #94a3b8; font-weight: 600; margin-bottom: 8px;'>PIPELINE PROGRESS</div>", unsafe_allow_html=True)
+        st.progress(progress_val)
+        st.markdown(f"<div style='font-size: 0.75rem; color: #64748b; margin-top: -12px; margin-bottom: 16px; text-align: right;'>{processed} / {total} Processed</div>", unsafe_allow_html=True)
+        
+        st.metric("🚨 Suspicious (Flagged)", f"{fraud_rate:.1f}%", f"{int(flagged_fraud)} identified", delta_color="inverse")
         st.divider()
         st.metric("🖼️ Images", img_count)
         st.metric("📄 Documents", doc_count)
@@ -323,7 +424,7 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🔧 Pipeline Config")
-    st.code("Agent 1: Qwen-VL-Plus\nCritic 1: Qwen Turbo\nCritic 2: DeepSeek R1-0528\nCritic 3: GLM 4.6", language="text")
+    st.code("Vision: Qwen-VL-Plus\nCritic 1: Qwen Turbo\nCritic 2: DeepSeek V3.2\nCritic 3: GLM 4.6", language="text")
 
 
 # ==========================================
@@ -362,12 +463,41 @@ with tab1:
     with col_result:
         if uploaded_file:
             if st.button("🔍 Analyze Authenticity", type="primary", key="single_analyze"):
-                with st.spinner("Running 3-Agent pipeline... This takes 2-3 minutes."):
-                    try:
-                        result, elapsed = process_uploaded_file(uploaded_file)
-                        render_result(result, uploaded_file.name, elapsed)
-                    except Exception as e:
-                        st.error(f"❌ Analysis failed: {e}")
+                loading_placeholder = st.empty()
+                with loading_placeholder.container():
+                    st.markdown("""
+<div class="verdict-card" style="border-color: rgba(56, 189, 248, 0.3); padding: 50px 32px;">
+<div class="pulsing-icon" style="font-size: 4rem; margin-bottom: 24px;">🕵️</div>
+<h3 style="color: #e0e7ff; font-weight: 700; margin-bottom: 12px; font-size: 1.5rem;">AI Forensics in Progress</h3>
+<p style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 32px; line-height: 1.5;">
+Running the Multi-Agent Zero-Trust Pipeline.<br>
+This deep analysis usually takes <b>2-3 minutes</b> to complete.
+</p>
+
+<div style="display: flex; flex-direction: column; gap: 16px; width: fit-content; margin: 0 auto; text-align: left;">
+<div style="display: flex; align-items: center;">
+<div style="width: 12px; height: 12px; border-radius: 50%; background: #38bdf8; margin-right: 16px; animation: blink 1.5s infinite; box-shadow: 0 0 10px #38bdf8;"></div>
+<span style="color: #cbd5e1; font-size: 0.95rem; font-weight: 500;">Extracting microscopic anomaly features...</span>
+</div>
+<div style="display: flex; align-items: center;">
+<div style="width: 12px; height: 12px; border-radius: 50%; background: #8b5cf6; margin-right: 16px; animation: blink 1.5s infinite 0.5s; box-shadow: 0 0 10px #8b5cf6;"></div>
+<span style="color: #cbd5e1; font-size: 0.95rem; font-weight: 500;">Cross-examining LLM Critics (DeepSeek, GLM)...</span>
+</div>
+<div style="display: flex; align-items: center;">
+<div style="width: 12px; height: 12px; border-radius: 50%; background: #34d399; margin-right: 16px; animation: blink 1.5s infinite 1s; box-shadow: 0 0 10px #34d399;"></div>
+<span style="color: #cbd5e1; font-size: 0.95rem; font-weight: 500;">Computing final consensus & confidence score...</span>
+</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+                
+                try:
+                    result, elapsed = process_uploaded_file(uploaded_file)
+                    loading_placeholder.empty()
+                    render_result(result, uploaded_file.name, elapsed)
+                except Exception as e:
+                    loading_placeholder.empty()
+                    st.error(f"❌ Analysis failed: {e}")
         else:
             st.info("👈 Upload an image or PDF on the left to begin.")
 

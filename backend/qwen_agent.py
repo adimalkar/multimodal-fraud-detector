@@ -6,6 +6,7 @@ import glob
 import subprocess
 import tempfile
 import cv2
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Try to load dotenv, otherwise read .env manually
@@ -27,14 +28,14 @@ FEATHERLESS_API_KEY = os.getenv("FEATHERLESS_API_KEY", "").strip()
 from PIL import Image
 import io
 
-def encode_image(image_path, max_size=(800, 800)):
-    # Open the image, resize and compress it in memory before encoding to save payload bytes
+def encode_image(image_path, max_size=(4000, 4000)):
+    # Open the image, resize if unnecessarily massive, and compress it with minimal loss
     with Image.open(image_path) as img:
         img = img.convert("RGB")
         img.thumbnail(max_size, Image.Resampling.LANCZOS)
         
         buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=75)
+        img.save(buffer, format="JPEG", quality=95)
         return base64.b64encode(buffer.getvalue()).decode('utf-8')
 
 
@@ -151,9 +152,9 @@ def get_few_shot_examples():
             # Use different reasoning for the two fake images to add variety
             reasoning = ""
             if i == 0:
-                reasoning = "Scanning the image for AI artifacts. (1) Anatomy: The people in the background have distorted faces and an incorrect number of fingers. (2) Physics/Structure: The car's crumpled bumper seems to melt into the asphalt seamlessly without proper texturing. (3) Lighting: Shadows fall in contradictory directions. Conclusion: The image is riddled with generative AI artifacts."
+                reasoning = "GRID SCAN INITIATED. Sector 5 (Center): The car's crumpled front bumper has smooth, clay-like deformations without sharp, jagged metal tearing typical of real crashes. Sector 1 (Top Left): The text on the billboard contains alien, impossible characters blending together. Sector 6 (Middle Right): The bystander's hand in the background is mangled into 6 fused fingers. Conclusion: The image is riddled with generative AI artifacts."
             else:
-                reasoning = "Scanning the image for AI artifacts. (1) Physics/Damage: The fire/water damage patterns look unnaturally clean and repetitive. (2) Lighting: Unnatural ambient occlusion. (3) Text: The text on the signs consists of unreadable alien characters. Conclusion: Highly likely to be AI-generated."
+                reasoning = "GRID SCAN INITIATED. Sector 8 (Bottom Center): The fire/water damage patterns perfectly stop at the exact edge of the vehicle panel, which is physically impossible. Sector 2 (Top Center): The lighting on the building contradicts the primary light source illuminating the street. Sector 9 (Bottom Right): Debris floating mid-air ignoring gravity. Conclusion: Highly likely to be AI-generated."
 
             # Add assistant response
             few_shot_messages.append({
@@ -223,8 +224,8 @@ CRITIC_MODELS = [
         "supports_json_mode": True,
     },
     {
-        "name": "DeepSeek R1-0528",
-        "model_id": "deepseek-ai/DeepSeek-R1-0528",
+        "name": "DeepSeek V3.2",
+        "model_id": "deepseek-ai/DeepSeek-V3.2",
         "api_url": "https://api.featherless.ai/v1/chat/completions",
         "api_key": FEATHERLESS_API_KEY,
         "extra_headers": {},
@@ -282,9 +283,11 @@ Required JSON Schema:
   "thought_process": "<Critique the Vision Agent's findings step-by-step and reason towards a conclusion.>",
   "classification": "Real" or "Fake",
   "confidence_score": <float between 0.0 and 1.0>,
-  "reason": "<A summary explanation of your final verdict based on your critique.>",
+  "reason": "<A highly professional, detailed 4-5 sentence Executive Summary written for an insurance claims adjuster. Explain EXACTLY why this evidence is fake or real based on the visual forensics. Make it comprehensive but accessible.>",
   "what_would_change_my_mind": "<Specific evidence that would cause you to flip your classification.>"
 }}
+
+CRITICAL INSTRUCTION FOR DEEPSEEK MODELS: You MUST output the JSON block AFTER your <think> block. Do not end your response without providing the valid JSON object.
     """
 
     headers = {
@@ -320,8 +323,8 @@ Required JSON Schema:
                 "what_would_change_my_mind": "",
             }
 
-        result_text = response.json()['choices'][0]['message']['content']
-        result_text = result_text.replace("```json\n", "").replace("```\n", "").replace("```", "").strip()
+        raw_text = response.json()['choices'][0]['message']['content']
+        result_text = raw_text.replace("```json\n", "").replace("```\n", "").replace("```", "").strip()
 
         # Try to strip DeepSeek <think> reasoning blocks
         think_end = result_text.find("</think>")
@@ -347,13 +350,13 @@ Required JSON Schema:
         return parsed
 
     except json.JSONDecodeError as e:
-        print(f"  ⚠ {model_name} returned invalid JSON: {e}")
+        print(f"  ⚠ {model_name} returned invalid JSON: {e}\n  Raw Text: {raw_text[:200]}...")
         return {
             "model": model_name,
             "classification": "Error",
             "confidence_score": 0.0,
-            "reason": f"JSON parse error: {str(e)}",
-            "thought_process": result_text[:500] if 'result_text' in dir() else "",
+            "reason": f"JSON parse error. Raw Output: {raw_text[:300]}...",
+            "thought_process": raw_text[:500] if 'raw_text' in locals() else "",
             "what_would_change_my_mind": "",
         }
     except Exception as e:
@@ -382,7 +385,7 @@ def aggregate_votes(critic_results):
             "confidence_score": 0.0,
             "consensus": "no_valid_votes",
             "reason": "All critic models failed to return valid results.",
-            "vote_breakdown": {r["model"]: {"classification": r["classification"], "confidence": r["confidence_score"]} for r in critic_results},
+            "vote_breakdown": {r["model"]: {"classification": r["classification"], "confidence": r.get("confidence_score", 0.0)} for r in critic_results},
             "calibration": "",
         }
 
@@ -424,7 +427,7 @@ def aggregate_votes(critic_results):
     # Build vote breakdown
     vote_breakdown = {}
     for r in critic_results:
-        vote_breakdown[r["model"]] = {
+        vote_breakdown[r.get("model", "Unknown")] = {
             "classification": r["classification"],
             "confidence": r.get("confidence_score", 0.0),
             "reason": r.get("reason", ""),
@@ -435,14 +438,17 @@ def aggregate_votes(critic_results):
     for r in valid_results:
         cal = r.get("what_would_change_my_mind", "")
         if cal:
-            calibration_parts.append(f"**{r['model']}** ({r['classification']}): {cal}")
+            calibration_parts.append(f"**{r.get('model', 'Unknown')}** ({r['classification']}): {cal}")
     calibration = "\n".join(calibration_parts)
 
-    # Build combined reason
-    reason_parts = []
-    for r in valid_results:
-        reason_parts.append(f"{r['model']}: {r.get('reason', 'No reason provided')}")
-    combined_reason = f"{majority_count}/{total_valid} models voted '{final_classification}'. " + " | ".join(reason_parts)
+    # Extract the best Executive Summary from the winning models
+    best_reason = winning_votes[0].get("reason", "No reason provided")
+    for r in winning_votes:
+        if "Qwen" in r.get("model", ""):
+            best_reason = r.get("reason", "No reason provided")
+            break
+            
+    combined_reason = f"({majority_count}/{total_valid} Consensus): {best_reason}"
 
     return {
         "classification": final_classification,
@@ -504,28 +510,27 @@ List ALL potential anomalies and indicate their severity. Do NOT output JSON. Ju
         """
     else:
         vlm_prompt = """
-You are an expert forensic image analyzer specializing in detecting AI-generated fraud. 
+You are an expert forensic image analyzer specializing in detecting high-quality, deceptive AI-generated fraud. 
 Your task is to scan this image for definitive AI GENERATION ARTIFACTS.
-CRITICAL: Do not confuse genuine low-resolution noise with AI generation.
-However, ONLY apply the "dashcam/low-res exception" IF AND ONLY IF the image unequivocally looks like a blurry, poorly lit dashcam security video. 
+
+CRITICAL INSTRUCTION - THE GRID SCAN:
+Do NOT just glance at the center of the image. You must mentally divide this image into a 3x3 grid and scan every single quadrant meticulously. 
+Look specifically in the deep background and the extreme foreground for microscopic failures in the generation model.
+
+Look for these STRONG, physics-defying indicators of AI:
+1. ANATOMICAL HORRORS: Scan every single person in the background. Are their hands mangled? Do they have 6 fingers, or fingers fusing together? Are their faces melting or structurally impossible?
+2. IMPOSSIBLE DAMAGE: If a car is heavily dented, is the paint perfectly glossy? Real high-impact crashes cause paint to chip, splinter, and scrape. AI models often generate "dents" that look like pushed-in, smooth clay.
+3. PRISTINE DEBRIS: Real accidents have chaotic micro-debris, dirt, and fluid. AI often renders perfectly uniform, clean glass chunks that look like CGI overlays.
+4. GIBBERISH TEXT: Zoom in on any street signs, license plates, or storefronts. Are the letters forming coherent English words, or are they impossible, alien-looking glyphs that just *resemble* text from afar?
+5. IMPOSSIBLE PHYSICS: Cars melting seamlessly into the ground, wheels intersecting solid objects without shadows.
+
+🚨 DASHCAM OVERRIDE EXCEPTION 🚨
+ONLY apply the "dashcam/low-res exception" IF AND ONLY IF the entire image unequivocally looks like a blurry, poorly lit dashcam security video. 
 DO NOT use the dashcam exception to excuse unnatural physics, melting objects, or flawless paint jobs on severely dented cars. These are signs of a high-quality AI fake pretending to be real.
-When analyzing, you MUST NOT flag the following as AI artifacts IF the image is clearly a low-res dashcam video:
-- Unreadable, pixelated, or compressed text/license plates (due to motion blur or low bitrate).
-- Jagged aliasing along the edges of vehicles (due to poor sensor quality).
-- Glare, windshield reflections, or lens flares.
-- Surfaces appearing "unnaturally smooth" or lacking detail IF the entire image is blurry/compressed. Only flag "perfect paint" if the image is otherwise high-resolution or if there is an obvious, massive dent that paradoxically has no scrape marks.
 
-Instead, look specifically for these STRONG, physics-defying indicators of AI:
-1. Anatomical errors (mangled hands, missing/extra limbs, faces melting).
-2. Impossible Physics/geometry failures (cars melting seamlessly into the ground, wheels intersecting solid objects).
-3. Background structural morphing (buildings merging into the sky or each other in physically impossible ways).
-4. Debris that floats entirely independent of the environment or ignores gravity.
-5. Lighting and shadows that completely contradict each other (e.g., shadows going toward the light source).
-6. FOR HIGH-QUALITY IMAGES: Look for "unnaturally clean" damage. If a car is heavily dented but the paint is perfectly glossy, there are no chaotic scrape marks, or the metal looks like smooth clay/plastic instead of jagged metallic tearing, flag it!
-7. Watch for hyper-realistic but nonsensical background text (store signs that look perfectly clear but contain alien/garbled characters).
-
-List ALL potential anomalies and indicate their severity. If the image just looks like a blurry or low-compression dashcam video, state that it appears to be a legitimate low-quality recording.
-Do NOT output JSON. Just output a detailed forensic report of what you see.
+List ALL potential anomalies and indicate their severity. 
+Did you find melted hands? State it! Did you find alien text? State it! 
+Do NOT output JSON. Just output a detailed, aggressive forensic report of what you see.
         """
 
     vlm_messages = [
@@ -574,11 +579,12 @@ Do NOT output JSON. Just output a detailed forensic report of what you see.
     vlm_payload = {
         "model": "qwen/qwen-vl-plus", 
         "messages": vlm_messages,
+        "max_tokens": 1000,
     }
     
     vlm_label = "Document Forensics" if is_document else "Vision Forensics"
     print(f"Calling Agent 1: {vlm_label}...")
-    vlm_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=vlm_payload)
+    vlm_response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=vlm_payload, verify=False)
     if vlm_response.status_code != 200:
         if "<html>" in vlm_response.text.lower():
             raise Exception(f"OpenRouter is down (Cloudflare 502 Bad Gateway). Please try again in a few minutes.")
@@ -597,9 +603,12 @@ Do NOT output JSON. Just output a detailed forensic report of what you see.
     featherless_models = [m for m in CRITIC_MODELS if "featherless" in m["api_url"]]
     
     def run_featherless_sequential(models, findings):
-        """Run Featherless models one after another to stay within concurrency limit."""
+        """Run Featherless models one after another with a delay to stay within concurrency limit."""
         results = []
-        for model in models:
+        for i, model in enumerate(models):
+            if i > 0:
+                print(f"  [Rate Limit Control] Pausing 2s before calling {model['name']}...")
+                time.sleep(2)
             results.append(call_critic(model, findings, media_type=media_type))
         return results
     
