@@ -29,7 +29,7 @@ jobs:
         # Stop the build if there are Python syntax errors or undefined names
         ruff check . --select=E9,F63,F7,F82 --output-format=github
         # The GitHub editor is 127 chars wide
-        ruff check . --exit-zero --max-line-length=127 --output-format=github
+        ruff check . --exit-zero --line-length=127 --output-format=github
 
     - name: Verify Application Imports
       run: |
