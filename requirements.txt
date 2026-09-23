@@ -6,4 +6,5 @@ opencv-python-headless
 uvicorn
 fastapi
 httpx
+python-multipart
 # Cache Buster: 1772759748

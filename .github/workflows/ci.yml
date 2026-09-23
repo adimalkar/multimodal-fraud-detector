@@ -36,3 +36,4 @@ jobs:
         # Ensures that the main files can be parsed and imported without runtime syntax/import errors
         python -c "import app"
         python -c "from backend import qwen_agent"
+        python -c "from backend import app"
