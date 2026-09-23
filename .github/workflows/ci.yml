@@ -30,7 +30,7 @@ jobs:
         pip install -r requirements.txt
         pip install ruff pytest httpx
         # Install system dependencies for OpenCV & PDF rendering
-        sudo apt-get update && sudo apt-get install -y libgl1-mesa-glx poppler-utils ffmpeg
+        sudo apt-get update && sudo apt-get install -y libgl1 poppler-utils ffmpeg
 
     - name: Lint with Ruff
       run: |
