@@ -1,21 +1,35 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
 import shutil
 import uuid
 import time
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 try:
     from backend.qwen_agent import analyze_media, analyze_video
 except ImportError:
     from qwen_agent import analyze_media, analyze_video
 
+try:
+    from backend.storage import (
+        generate_presigned_upload_url,
+        is_storage_configured,
+        download_file_stream
+    )
+except ImportError:
+    from storage import (
+        generate_presigned_upload_url,
+        is_storage_configured,
+        download_file_stream
+    )
+
 app = FastAPI(
     title="FraudSight AI Backend API",
-    description="Multi-agent multimodal insurance fraud detection API with asynchronous job queuing",
-    version="2.0.0"
+    description="Multi-agent multimodal insurance fraud detection API with asynchronous job queuing and object storage support",
+    version="2.1.0"
 )
 
 # Enable CORS for Next.js frontend (Vercel, localhost, and custom domains)
@@ -32,6 +46,15 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 # In-memory job store
 jobs: Dict[str, Dict[str, Any]] = {}
+
+class PresignedUrlRequest(BaseModel):
+    filename: str
+    content_type: str = "image/jpeg"
+
+class AnalyzeUrlRequest(BaseModel):
+    media_url: str
+    filename: Optional[str] = "evidence_file"
+    content_type: Optional[str] = None
 
 def cleanup_old_jobs():
     """Remove jobs older than 1 hour to prevent memory growth on free tiers."""
@@ -116,16 +139,46 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
             except Exception:
                 pass
 
+async def run_analysis_pipeline_from_url(job_id: str, media_url: str, media_type: str, content_type: str, filename: str):
+    """Downloads remote file in stream chunks before dispatching to pipeline."""
+    safe_filename = f"{job_id}_{os.path.basename(filename)}"
+    file_path = os.path.join(TEMP_DIR, safe_filename)
+
+    try:
+        jobs[job_id]["stage"] = "Streaming media file into memory-efficient buffer..."
+        jobs[job_id]["progress"] = 20
+        await download_file_stream(media_url, file_path)
+
+        # Offload CPU-heavy pipeline to thread pool
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, run_analysis_pipeline, job_id, file_path, media_type, content_type)
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["progress"] = 100
+        jobs[job_id]["stage"] = "Failed to stream media"
+        jobs[job_id]["error"] = str(e)
+        jobs[job_id]["updated_at"] = time.time()
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+
 @app.get("/")
 def root():
     return {
         "service": "FraudSight AI Engine",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "status": "online",
         "docs": "/docs",
+        "storage": {
+            "configured": is_storage_configured(),
+            "presigned_upload": "POST /api/storage/presigned-url"
+        },
         "endpoints": {
             "health": "/api/health",
-            "submit_job": "POST /api/analyze",
+            "submit_upload_job": "POST /api/analyze",
+            "submit_url_job": "POST /api/analyze-url",
             "job_status": "GET /api/jobs/{job_id}"
         }
     }
@@ -137,11 +190,29 @@ def health_check():
     return {
         "status": "healthy",
         "service": "FraudSight AI API",
+        "storage_configured": is_storage_configured(),
         "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]])
+    }
+
+@app.post("/api/storage/presigned-url")
+def request_presigned_url(req: PresignedUrlRequest):
+    """
+    Generates a pre-signed URL for direct browser uploads to Cloudflare R2 / S3.
+    Bypasses API server RAM completely.
+    """
+    return generate_presigned_upload_url(req.filename, req.content_type)
+
+@app.get("/api/storage/status")
+def storage_status():
+    return {
+        "configured": is_storage_configured(),
+        "endpoint": os.environ.get("S3_ENDPOINT_URL") or os.environ.get("R2_ENDPOINT_URL"),
+        "bucket": os.environ.get("S3_BUCKET_NAME") or os.environ.get("R2_BUCKET_NAME")
     }
 
 @app.post("/api/analyze")
 async def create_analysis_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """Accepts direct multipart file upload and enqueues background evaluation."""
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -172,7 +243,6 @@ async def create_analysis_job(background_tasks: BackgroundTasks, file: UploadFil
         "error": None
     }
 
-    # Execute in background thread so request returns immediately (<100ms)
     background_tasks.add_task(run_analysis_pipeline, job_id, file_path, media_type, content_type)
 
     return {
@@ -181,6 +251,44 @@ async def create_analysis_job(background_tasks: BackgroundTasks, file: UploadFil
         "media_type": media_type,
         "filename": file.filename,
         "message": "Analysis started in background. Poll /api/jobs/{job_id} for progress."
+    }
+
+@app.post("/api/analyze-url")
+async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTasks, req: AnalyzeUrlRequest):
+    """
+    Initiates analysis on a media file stored in Cloudflare R2 / S3 / Supabase.
+    Buffers the file in chunks without crashing 512MB RAM containers.
+    """
+    if not req.media_url:
+        raise HTTPException(status_code=400, detail="media_url is required")
+
+    cleanup_old_jobs()
+    job_id = str(uuid.uuid4())
+    media_type, content_type = detect_media_type(req.filename or "file", req.content_type or "")
+
+    jobs[job_id] = {
+        "job_id": job_id,
+        "filename": req.filename,
+        "media_url": req.media_url,
+        "media_type": media_type,
+        "content_type": content_type,
+        "status": "queued",
+        "progress": 10,
+        "stage": f"Queued for {media_type.lower()} forensics from cloud storage...",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "result": None,
+        "error": None
+    }
+
+    background_tasks.add_task(run_analysis_pipeline_from_url, job_id, req.media_url, media_type, content_type, req.filename or "file")
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "media_type": media_type,
+        "filename": req.filename,
+        "message": "Analysis started from cloud storage URL. Poll /api/jobs/{job_id} for progress."
     }
 
 @app.get("/api/jobs/{job_id}")

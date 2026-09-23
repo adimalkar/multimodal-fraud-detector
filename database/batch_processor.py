@@ -8,7 +8,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from backend.qwen_agent import analyze_media
 
-DB_PATH = "/home/aditya/Downloads/Hackathon/database/fraud_detection.db"
+DB_PATH = os.environ.get("DATABASE_PATH") or os.path.join(os.path.dirname(__file__), "fraud_detection.db")
 
 def process_batch():
     # Connect to the database
