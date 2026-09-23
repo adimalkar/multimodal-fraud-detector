@@ -14,10 +14,17 @@ interface AnalyticsData {
   flagged_rate_percentage: number;
   avg_confidence: number;
   avg_processing_time_sec: number;
+  database_engine?: string;
   media_counts: {
     images: number;
     documents: number;
     videos: number;
+  };
+  severity_breakdown?: {
+    critical_fraud: number;
+    high_risk: number;
+    suspicious: number;
+    low_risk: number;
   };
   recent_evaluations: Array<{
     id: number;
@@ -26,6 +33,9 @@ interface AnalyticsData {
     fraud_category: string;
     ai_prediction: string;
     confidence: number;
+    risk_score?: number;
+    severity_tier?: string;
+    recommended_action?: string;
     final_reasoning: string;
     processing_time: number;
     processed_at: string;
@@ -40,10 +50,17 @@ const mockDefaultData: AnalyticsData = {
   flagged_rate_percentage: 39.6,
   avg_confidence: 0.942,
   avg_processing_time_sec: 4.8,
+  database_engine: "PostgreSQL / SQLite",
   media_counts: {
     images: 32,
     documents: 11,
     videos: 5
+  },
+  severity_breakdown: {
+    critical_fraud: 12,
+    high_risk: 7,
+    suspicious: 14,
+    low_risk: 15
   },
   recent_evaluations: [
     {
@@ -53,6 +70,9 @@ const mockDefaultData: AnalyticsData = {
       fraud_category: "Document Fraud",
       ai_prediction: "Fake",
       confidence: 0.98,
+      risk_score: 0.96,
+      severity_tier: "CRITICAL_FRAUD",
+      recommended_action: "BLOCK_TRANSACTION_AND_ALERT_SECURITY",
       final_reasoning: "DeepSeek & Qwen critics identified spliced font metrics and metadata mismatch in header.",
       processing_time: 3.2,
       processed_at: "2026-09-22 21:15:30"
@@ -64,6 +84,9 @@ const mockDefaultData: AnalyticsData = {
       fraud_category: "Vehicle Claim",
       ai_prediction: "Real",
       confidence: 0.96,
+      risk_score: 0.08,
+      severity_tier: "LOW_RISK",
+      recommended_action: "APPROVE_AUTOMATICALLY",
       final_reasoning: "Authentic ambient specular reflections and natural compression artifacts confirmed by jury.",
       processing_time: 2.1,
       processed_at: "2026-09-22 20:45:10"
@@ -75,6 +98,9 @@ const mockDefaultData: AnalyticsData = {
       fraud_category: "Vehicle Claim",
       ai_prediction: "Fake",
       confidence: 0.93,
+      risk_score: 0.88,
+      severity_tier: "HIGH_RISK",
+      recommended_action: "ESCALATE_TO_SENIOR_ANALYST_QUEUE",
       final_reasoning: "Frame-to-frame temporal inconsistency detected on passenger door reflection pattern.",
       processing_time: 8.4,
       processed_at: "2026-09-22 19:30:22"
@@ -86,6 +112,9 @@ const mockDefaultData: AnalyticsData = {
       fraud_category: "Property Claim",
       ai_prediction: "Real",
       confidence: 0.89,
+      risk_score: 0.22,
+      severity_tier: "LOW_RISK",
+      recommended_action: "APPROVE_AUTOMATICALLY",
       final_reasoning: "Consistent lighting angle across impact craters matching solar direction metadata.",
       processing_time: 2.4,
       processed_at: "2026-09-22 18:12:05"
@@ -126,6 +155,36 @@ const AnalyticsDashboard = () => {
     window.open(`${apiUrl}/api/analytics/export-csv`, '_blank');
   };
 
+  const getTierBadge = (tier?: string) => {
+    switch (tier) {
+      case 'CRITICAL_FRAUD':
+        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-red-500/20 text-red-400 border border-red-500/30">CRITICAL</span>;
+      case 'HIGH_RISK':
+        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30">HIGH RISK</span>;
+      case 'SUSPICIOUS':
+        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-yellow-500/20 text-yellow-300 border border-yellow-500/30">SUSPICIOUS</span>;
+      case 'LOW_RISK':
+        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">LOW RISK</span>;
+      default:
+        return <span className="px-2 py-0.5 rounded-full font-mono text-[10px] text-white/40">--</span>;
+    }
+  };
+
+  const getActionBadge = (action?: string) => {
+    switch (action) {
+      case 'BLOCK_TRANSACTION_AND_ALERT_SECURITY':
+        return <span className="text-red-400 font-medium">Block & Alert</span>;
+      case 'ESCALATE_TO_SENIOR_ANALYST_QUEUE':
+        return <span className="text-amber-300 font-medium">Escalate Queue</span>;
+      case 'REQUIRE_STEP_UP_MFA_AUTHENTICATION':
+        return <span className="text-yellow-300 font-medium">Step-up MFA</span>;
+      case 'APPROVE_AUTOMATICALLY':
+        return <span className="text-emerald-400 font-medium">Auto Approve</span>;
+      default:
+        return <span className="text-white/40 font-mono">Manual Review</span>;
+    }
+  };
+
   return (
     <section className="py-12 md:py-16">
       <div className="container max-w-6xl mx-auto px-4">
@@ -136,10 +195,10 @@ const AnalyticsDashboard = () => {
             <div className="flex items-center gap-3">
               <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-white">Forensics Analytics & Audit Log</h1>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${isLive ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-purple-500/20 text-purple-300 border-purple-500/30'}`}>
-                {isLive ? '● Live Database' : 'Demo Dataset'}
+                {isLive ? `● Live (${data.database_engine || 'Database'})` : 'Demo Dataset'}
               </span>
             </div>
-            <p className="text-white/60 text-sm mt-1">Multi-agent consensus history, fraud classification breakdown, and forensic audit logs.</p>
+            <p className="text-white/60 text-sm mt-1">Multi-agent consensus history, risk tier breakdown, and policy audit logs.</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -148,14 +207,18 @@ const AnalyticsDashboard = () => {
               disabled={loading}
               className="text-xs px-3.5 py-2 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 text-white transition flex items-center gap-1.5"
             >
-              <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+              <svg className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
               Refresh
             </button>
             <button
               onClick={handleDownloadCsv}
               className="text-xs px-3.5 py-2 rounded-lg border border-purple-500/30 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 transition flex items-center gap-1.5"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
               Export CSV Report
             </button>
             <Link href="/analyze">
@@ -190,6 +253,32 @@ const AnalyticsDashboard = () => {
             <span className="text-xs text-purple-200/60 mt-1 block">Avg latency: {data.avg_processing_time_sec}s</span>
           </motion.div>
         </div>
+
+        {/* Severity Risk Tier Distribution */}
+        {data.severity_breakdown && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+            <div className="p-4 rounded-xl bg-red-950/20 border border-red-500/20 text-center">
+              <div className="text-[11px] uppercase tracking-wider text-red-400 font-semibold">🚨 Critical Fraud</div>
+              <div className="text-2xl font-bold text-red-300 mt-1">{data.severity_breakdown.critical_fraud}</div>
+              <span className="text-[10px] text-white/40">Immediate block policy</span>
+            </div>
+            <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/20 text-center">
+              <div className="text-[11px] uppercase tracking-wider text-amber-400 font-semibold">⚠️ High Risk</div>
+              <div className="text-2xl font-bold text-amber-300 mt-1">{data.severity_breakdown.high_risk}</div>
+              <span className="text-[10px] text-white/40">Escalated to senior queue</span>
+            </div>
+            <div className="p-4 rounded-xl bg-yellow-950/20 border border-yellow-500/20 text-center">
+              <div className="text-[11px] uppercase tracking-wider text-yellow-400 font-semibold">🔍 Suspicious</div>
+              <div className="text-2xl font-bold text-yellow-300 mt-1">{data.severity_breakdown.suspicious}</div>
+              <span className="text-[10px] text-white/40">Step-up verification required</span>
+            </div>
+            <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/20 text-center">
+              <div className="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">🛡️ Low Risk</div>
+              <div className="text-2xl font-bold text-emerald-300 mt-1">{data.severity_breakdown.low_risk}</div>
+              <span className="text-[10px] text-white/40">Automated fast approval</span>
+            </div>
+          </div>
+        )}
 
         {/* Media Distribution Breakdown */}
         <div className="p-5 rounded-2xl bg-[#0d071b] border border-white/10 mb-8 flex flex-wrap items-center justify-between gap-6">
@@ -227,6 +316,8 @@ const AnalyticsDashboard = () => {
                   <th className="py-3.5 px-4 font-semibold">Type</th>
                   <th className="py-3.5 px-4 font-semibold">Verdict</th>
                   <th className="py-3.5 px-4 font-semibold">Confidence</th>
+                  <th className="py-3.5 px-4 font-semibold">Severity Tier</th>
+                  <th className="py-3.5 px-4 font-semibold">Policy Action</th>
                   <th className="py-3.5 px-4 font-semibold">Jury Forensic Findings</th>
                   <th className="py-3.5 px-4 font-semibold">Timestamp</th>
                 </tr>
@@ -234,7 +325,7 @@ const AnalyticsDashboard = () => {
               <tbody className="divide-y divide-white/5 text-white/80">
                 {data.recent_evaluations.map((item) => (
                   <tr key={item.id} className="hover:bg-white/[0.02] transition">
-                    <td className="py-3.5 px-4 font-medium text-white truncate max-w-[200px]">{item.filename}</td>
+                    <td className="py-3.5 px-4 font-medium text-white truncate max-w-[180px]">{item.filename}</td>
                     <td className="py-3.5 px-4">
                       <span className="px-2 py-0.5 rounded bg-white/10 text-white/80 text-[11px]">
                         {item.media_type}
@@ -247,7 +338,7 @@ const AnalyticsDashboard = () => {
                     </td>
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div className="w-14 h-1.5 rounded-full bg-white/10 overflow-hidden">
                           <div 
                             className={`h-full ${item.ai_prediction.toLowerCase() === 'fake' ? 'bg-red-400' : 'bg-emerald-400'}`}
                             style={{ width: `${item.confidence * 100}%` }}
@@ -256,7 +347,13 @@ const AnalyticsDashboard = () => {
                         <span className="font-semibold">{(item.confidence * 100).toFixed(0)}%</span>
                       </div>
                     </td>
-                    <td className="py-3.5 px-4 max-w-[340px] truncate text-white/60" title={item.final_reasoning}>
+                    <td className="py-3.5 px-4 whitespace-nowrap">
+                      {getTierBadge(item.severity_tier)}
+                    </td>
+                    <td className="py-3.5 px-4 whitespace-nowrap text-[11px]">
+                      {getActionBadge(item.recommended_action)}
+                    </td>
+                    <td className="py-3.5 px-4 max-w-[280px] truncate text-white/60" title={item.final_reasoning}>
                       {item.final_reasoning}
                     </td>
                     <td className="py-3.5 px-4 text-white/40 whitespace-nowrap">{item.processed_at}</td>

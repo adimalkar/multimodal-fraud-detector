@@ -41,6 +41,15 @@ except ImportError:
         export_evaluations_csv
     )
 
+try:
+    from backend.risk_scorer import MultimodalRiskScorer
+    from backend.metadata_extractor import extract_metadata
+except ImportError:
+    from risk_scorer import MultimodalRiskScorer
+    from metadata_extractor import extract_metadata
+
+risk_scorer_engine = MultimodalRiskScorer()
+
 app = FastAPI(
     title="FraudSight AI Backend API",
     description="Multi-agent multimodal insurance fraud detection API with asynchronous job queuing and object storage support",
@@ -94,8 +103,16 @@ def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
         return "Image", content_type or "image/jpeg"
 
 def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
-    """Runs multi-agent vision & critic forensics and formats result structure."""
+    """Runs multi-agent vision & critic forensics and formats result structure with unified risk scoring."""
     start_time = time.time()
+
+    # 1. Forensic metadata extraction
+    meta_info = extract_metadata(file_path, media_type)
+    metadata_dict = meta_info.get("metadata", {})
+    metadata_flags = meta_info.get("flags", [])
+    flags_count = meta_info.get("flags_count", 0)
+
+    # 2. Vision agent & LLM critic jury
     if media_type == "Video":
         raw_result = analyze_video(file_path)
     else:
@@ -103,22 +120,56 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
 
     elapsed = round(time.time() - start_time, 2)
 
-    # Normalize result for consistent frontend consumption
+    # 3. Normalize voting breakdown
     vote_breakdown = raw_result.get("vote_breakdown", {})
     votes_list = []
+    fake_votes_conf = []
+    real_votes_conf = []
+
     if isinstance(vote_breakdown, dict):
         for model_name, info in vote_breakdown.items():
             if isinstance(info, dict):
+                v_vote = info.get("classification", "Unknown")
+                v_conf = float(info.get("confidence", 0.0))
                 votes_list.append({
                     "model": model_name,
-                    "vote": info.get("classification", "Unknown"),
-                    "conf": info.get("confidence", 0.0)
+                    "vote": v_vote,
+                    "conf": v_conf
                 })
+                if v_vote.lower() == "fake":
+                    fake_votes_conf.append(v_conf)
+                elif v_vote.lower() == "real":
+                    real_votes_conf.append(v_conf)
+
+    classification = raw_result.get("classification", "Unknown")
+    confidence_score = float(raw_result.get("confidence_score", 0.0))
+
+    # 4. Multimodal risk heuristic calculation
+    if classification.lower() == "fake":
+        visual_score = confidence_score
+    elif classification.lower() == "real":
+        visual_score = max(0.0, 1.0 - confidence_score)
+    else:
+        visual_score = 0.5
+
+    if fake_votes_conf:
+        text_score = sum(fake_votes_conf) / len(fake_votes_conf)
+    elif real_votes_conf:
+        text_score = max(0.0, 1.0 - (sum(real_votes_conf) / len(real_votes_conf)))
+    else:
+        text_score = visual_score
+
+    risk_assessment = risk_scorer_engine.calculate_risk(
+        text_score=text_score,
+        visual_score=visual_score,
+        metadata_flags=flags_count,
+        synergy_boost_enabled=True
+    )
 
     return {
-        "classification": raw_result.get("classification", "Unknown"),
-        "confidence": raw_result.get("confidence_score", 0.0),
-        "confidence_score": raw_result.get("confidence_score", 0.0),
+        "classification": classification,
+        "confidence": confidence_score,
+        "confidence_score": confidence_score,
         "reason": raw_result.get("reason", ""),
         "vision_findings": raw_result.get("vision_findings", ""),
         "votes": votes_list,
@@ -126,7 +177,17 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
         "consensus": raw_result.get("consensus", "majority"),
         "calibration": raw_result.get("calibration", ""),
         "elapsed_seconds": elapsed,
-        "media_type": media_type
+        "media_type": media_type,
+        "multimodal_risk": {
+            "risk_score": risk_assessment["risk_score"],
+            "severity_tier": risk_assessment["severity_tier"],
+            "recommended_action": risk_assessment["recommended_action"],
+            "cross_modal_synergy_applied": risk_assessment["cross_modal_synergy_applied"],
+            "breakdown": risk_assessment["breakdown"],
+            "metadata": metadata_dict,
+            "metadata_flags": metadata_flags,
+            "metadata_flags_count": flags_count
+        }
     }
 
 def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_type: str):
@@ -156,6 +217,7 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
         # Automatically persist to database for analytics dashboard
         try:
             filename = jobs[job_id].get("filename", "evidence_file")
+            risk_data = formatted_result.get("multimodal_risk", {})
             save_evaluation(
                 filename=filename,
                 media_type=media_type,
@@ -163,7 +225,10 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
                 confidence=formatted_result["confidence"],
                 final_reasoning=formatted_result["reason"],
                 vision_findings=formatted_result.get("vision_findings", ""),
-                processing_time=elapsed
+                processing_time=elapsed,
+                risk_score=risk_data.get("risk_score"),
+                severity_tier=risk_data.get("severity_tier"),
+                recommended_action=risk_data.get("recommended_action")
             )
         except Exception as db_err:
             print(f"Database save notice: {db_err}")
@@ -225,6 +290,7 @@ def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
             processed_count += 1
 
             try:
+                risk_data = formatted_result.get("multimodal_risk", {})
                 save_evaluation(
                     filename=filename,
                     media_type=media_type,
@@ -232,7 +298,10 @@ def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
                     confidence=conf,
                     final_reasoning=formatted_result.get("reason", ""),
                     vision_findings=formatted_result.get("vision_findings", ""),
-                    processing_time=formatted_result.get("elapsed_seconds", 0.0)
+                    processing_time=formatted_result.get("elapsed_seconds", 0.0),
+                    risk_score=risk_data.get("risk_score"),
+                    severity_tier=risk_data.get("severity_tier"),
+                    recommended_action=risk_data.get("recommended_action")
                 )
             except Exception as dbe:
                 print(f"Batch db save notice: {dbe}")

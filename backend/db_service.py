@@ -2,7 +2,8 @@ import os
 import sqlite3
 import csv
 import io
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -15,6 +16,24 @@ DB_PATH = os.environ.get("DATABASE_PATH") or os.path.abspath(
 
 def is_postgres() -> bool:
     return bool(DATABASE_URL and ("postgresql://" in DATABASE_URL or "postgres://" in DATABASE_URL))
+
+def ensure_columns(conn):
+    """Ensures multimodal risk columns exist on existing database tables."""
+    new_cols = [
+        ("risk_score", "REAL"),
+        ("severity_tier", "TEXT"),
+        ("recommended_action", "TEXT")
+    ]
+    for col, col_type in new_cols:
+        try:
+            if is_postgres() and hasattr(conn, "cursor_factory"):
+                with conn.cursor() as cur:
+                    cur.execute(f"ALTER TABLE evidence ADD COLUMN IF NOT EXISTS {col} {col_type}")
+                conn.commit()
+            else:
+                conn.execute(f"ALTER TABLE evidence ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass
 
 def get_connection():
     """Returns a database connection (PostgreSQL if DATABASE_URL is set, else SQLite)."""
@@ -38,10 +57,14 @@ def get_connection():
                         final_reasoning TEXT,
                         is_processed BOOLEAN DEFAULT TRUE,
                         processing_time REAL,
-                        processed_at TEXT
+                        processed_at TEXT,
+                        risk_score REAL,
+                        severity_tier TEXT,
+                        recommended_action TEXT
                     )
                 """)
             conn.commit()
+            ensure_columns(conn)
             return conn
         except Exception as e:
             print(f"PostgreSQL connection warning ({e}), falling back to SQLite: {DB_PATH}")
@@ -65,9 +88,13 @@ def get_connection():
                 final_reasoning TEXT,
                 is_processed BOOLEAN DEFAULT 1,
                 processing_time REAL,
-                processed_at TEXT
+                processed_at TEXT,
+                risk_score REAL,
+                severity_tier TEXT,
+                recommended_action TEXT
             )
         """)
+    ensure_columns(conn)
     return conn
 
 def save_evaluation(
@@ -79,11 +106,14 @@ def save_evaluation(
     vision_findings: str = "",
     fraud_category: str = "General Claim",
     processing_time: float = 0.0,
-    file_path: Optional[str] = None
+    file_path: Optional[str] = None,
+    risk_score: Optional[float] = None,
+    severity_tier: Optional[str] = None,
+    recommended_action: Optional[str] = None
 ) -> int:
     """Saves a completed multi-agent analysis record to the database."""
     conn = get_connection()
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     # Adapt placeholder syntax between Postgres (%s) and SQLite (?)
     placeholder = "%s" if is_postgres() and hasattr(conn, "cursor_factory") else "?"
@@ -92,12 +122,14 @@ def save_evaluation(
         INSERT INTO evidence (
             filename, file_path, media_type, fraud_category, ground_truth,
             ai_prediction, confidence, vision_findings, final_reasoning,
-            is_processed, processing_time, processed_at
-        ) VALUES ({','.join([placeholder] * 11)})
+            is_processed, processing_time, processed_at,
+            risk_score, severity_tier, recommended_action
+        ) VALUES ({','.join([placeholder] * 15)})
     """
+    actual_file_path = file_path or f"{filename}_{uuid.uuid4().hex[:8]}"
     params = (
         filename,
-        file_path or filename,
+        actual_file_path,
         media_type,
         fraud_category,
         "Pending Review",
@@ -105,8 +137,12 @@ def save_evaluation(
         float(confidence),
         vision_findings,
         final_reasoning,
+        1,  # is_processed
         float(processing_time),
-        timestamp
+        timestamp,
+        float(risk_score) if risk_score is not None else None,
+        severity_tier,
+        recommended_action
     )
 
     if is_postgres() and hasattr(conn, "cursor_factory"):
@@ -158,8 +194,22 @@ def get_analytics_summary() -> Dict[str, Any]:
 
     flagged_rate = round((fake_count / processed_records * 100), 1) if processed_records > 0 else 0.0
 
+    # Severity tier counts
+    cursor.execute("SELECT COUNT(*) FROM evidence WHERE severity_tier = 'CRITICAL_FRAUD'")
+    critical_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM evidence WHERE severity_tier = 'HIGH_RISK'")
+    high_risk_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM evidence WHERE severity_tier = 'SUSPICIOUS'")
+    suspicious_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM evidence WHERE severity_tier = 'LOW_RISK'")
+    low_risk_count = cursor.fetchone()[0]
+
     cursor.execute("""
         SELECT id, filename, media_type, fraud_category, ai_prediction, confidence,
+               risk_score, severity_tier, recommended_action,
                final_reasoning, processing_time, processed_at
         FROM evidence
         ORDER BY id DESC
@@ -182,6 +232,12 @@ def get_analytics_summary() -> Dict[str, Any]:
             "documents": document_count,
             "videos": video_count
         },
+        "severity_breakdown": {
+            "critical_fraud": critical_count,
+            "high_risk": high_risk_count,
+            "suspicious": suspicious_count,
+            "low_risk": low_risk_count
+        },
         "recent_evaluations": recent
     }
 
@@ -192,7 +248,8 @@ def get_evaluations_list(limit: int = 50, offset: int = 0) -> List[Dict[str, Any
     placeholder = "%s" if is_postgres() and hasattr(conn, "cursor_factory") else "?"
     cursor.execute(f"""
         SELECT id, filename, media_type, fraud_category, ground_truth,
-               ai_prediction, confidence, vision_findings, final_reasoning,
+               ai_prediction, confidence, risk_score, severity_tier, recommended_action,
+               vision_findings, final_reasoning,
                processing_time, processed_at
         FROM evidence
         ORDER BY id DESC
@@ -208,7 +265,8 @@ def export_evaluations_csv() -> str:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT filename, media_type, fraud_category, ground_truth,
-               ai_prediction, confidence, vision_findings, final_reasoning,
+               ai_prediction, confidence, risk_score, severity_tier, recommended_action,
+               vision_findings, final_reasoning,
                processing_time, processed_at
         FROM evidence
         WHERE is_processed = 1 OR is_processed = TRUE
@@ -225,6 +283,9 @@ def export_evaluations_csv() -> str:
         "Ground Truth",
         "AI Prediction",
         "Confidence Score",
+        "Risk Score",
+        "Severity Tier",
+        "Recommended Action",
         "Visual Findings",
         "Reasoning Output",
         "Latency (sec)",
@@ -232,17 +293,22 @@ def export_evaluations_csv() -> str:
     ])
 
     for row in rows:
+        row_dict = dict(row)
+        risk_val = row_dict.get("risk_score")
         writer.writerow([
-            row["filename"],
-            row["media_type"],
-            row["fraud_category"],
-            row["ground_truth"],
-            row["ai_prediction"],
-            f"{float(row['confidence'] or 0.0):.2f}",
-            row["vision_findings"] or "",
-            row["final_reasoning"] or "",
-            f"{float(row['processing_time'] or 0.0):.2f}",
-            row["processed_at"] or ""
+            row_dict["filename"],
+            row_dict["media_type"],
+            row_dict["fraud_category"],
+            row_dict["ground_truth"],
+            row_dict["ai_prediction"],
+            f"{float(row_dict['confidence'] or 0.0):.2f}",
+            f"{float(risk_val):.2f}" if risk_val is not None else "--",
+            row_dict.get("severity_tier") or "N/A",
+            row_dict.get("recommended_action") or "MANUAL_REVIEW",
+            row_dict["vision_findings"] or "",
+            row_dict["final_reasoning"] or "",
+            f"{float(row_dict['processing_time'] or 0.0):.2f}",
+            row_dict["processed_at"] or ""
         ])
 
     conn.close()
