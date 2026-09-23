@@ -8,4 +8,6 @@ fastapi
 httpx
 python-multipart
 boto3
+psycopg2-binary
 # Cache Buster: 1772759748
+

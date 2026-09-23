@@ -86,3 +86,42 @@ def test_analytics_csv_export(client):
     assert response.status_code == 200
     assert "text/csv" in response.headers["content-type"]
     assert "File Name" in response.text
+
+def test_batch_analyze_and_poll_status(client):
+    file1 = ("image1.jpg", io.BytesIO(b"file 1 dummy data"), "image/jpeg")
+    file2 = ("document2.pdf", io.BytesIO(b"file 2 dummy pdf"), "application/pdf")
+
+    response = client.post(
+        "/api/batch/analyze",
+        files=[("files", file1), ("files", file2)]
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "batch_id" in data
+    assert data["status"] == "queued"
+    assert data["total_files"] == 2
+
+    batch_id = data["batch_id"]
+
+    # Poll batch status
+    poll_res = client.get(f"/api/batch/{batch_id}")
+    assert poll_res.status_code == 200
+    poll_data = poll_res.json()
+    assert poll_data["batch_id"] == batch_id
+    assert poll_data["total_items"] == 2
+    assert "summary" in poll_data
+    assert "items" in poll_data
+    assert len(poll_data["items"]) == 2
+
+def test_batch_analyze_validation(client):
+    response = client.post(
+        "/api/batch/analyze",
+        files=[("files", ("", io.BytesIO(b""), "image/jpeg"))]
+    )
+    assert response.status_code in [400, 422]
+
+def test_batch_status_404(client):
+    fake_id = str(uuid.uuid4())
+    response = client.get(f"/api/batch/{fake_id}")
+    assert response.status_code == 404
+

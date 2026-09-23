@@ -6,7 +6,7 @@ import shutil
 import uuid
 import time
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 try:
     from backend.qwen_agent import analyze_media, analyze_video
@@ -59,8 +59,9 @@ app.add_middleware(
 TEMP_DIR = os.path.join(os.path.dirname(__file__), "..", "temp_uploads")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# In-memory job store
+# In-memory job and batch stores
 jobs: Dict[str, Dict[str, Any]] = {}
+batches: Dict[str, Dict[str, Any]] = {}
 
 class PresignedUrlRequest(BaseModel):
     filename: str
@@ -72,11 +73,14 @@ class AnalyzeUrlRequest(BaseModel):
     content_type: Optional[str] = None
 
 def cleanup_old_jobs():
-    """Remove jobs older than 1 hour to prevent memory growth on free tiers."""
+    """Remove jobs and batches older than 1 hour to prevent memory growth on free tiers."""
     now = time.time()
-    expired = [jid for jid, j in jobs.items() if now - j.get("created_at", now) > 3600]
-    for jid in expired:
+    expired_jobs = [jid for jid, j in jobs.items() if now - j.get("created_at", now) > 3600]
+    for jid in expired_jobs:
         jobs.pop(jid, None)
+    expired_batches = [bid for bid, b in batches.items() if now - b.get("created_at", now) > 3600]
+    for bid in expired_batches:
+        batches.pop(bid, None)
 
 def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
     ext = filename.split(".")[-1].lower() if "." in filename else ""
@@ -89,9 +93,44 @@ def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
     else:
         return "Image", content_type or "image/jpeg"
 
+def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
+    """Runs multi-agent vision & critic forensics and formats result structure."""
+    start_time = time.time()
+    if media_type == "Video":
+        raw_result = analyze_video(file_path)
+    else:
+        raw_result = analyze_media(file_path, content_type, media_type=media_type)
+
+    elapsed = round(time.time() - start_time, 2)
+
+    # Normalize result for consistent frontend consumption
+    vote_breakdown = raw_result.get("vote_breakdown", {})
+    votes_list = []
+    if isinstance(vote_breakdown, dict):
+        for model_name, info in vote_breakdown.items():
+            if isinstance(info, dict):
+                votes_list.append({
+                    "model": model_name,
+                    "vote": info.get("classification", "Unknown"),
+                    "conf": info.get("confidence", 0.0)
+                })
+
+    return {
+        "classification": raw_result.get("classification", "Unknown"),
+        "confidence": raw_result.get("confidence_score", 0.0),
+        "confidence_score": raw_result.get("confidence_score", 0.0),
+        "reason": raw_result.get("reason", ""),
+        "vision_findings": raw_result.get("vision_findings", ""),
+        "votes": votes_list,
+        "vote_breakdown": vote_breakdown,
+        "consensus": raw_result.get("consensus", "majority"),
+        "calibration": raw_result.get("calibration", ""),
+        "elapsed_seconds": elapsed,
+        "media_type": media_type
+    }
+
 def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_type: str):
     """Synchronous worker function executed in background thread."""
-    start_time = time.time()
     try:
         jobs[job_id]["status"] = "processing"
         jobs[job_id]["stage"] = "Multi-agent vision & critic forensics in progress..."
@@ -101,39 +140,12 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
         if media_type == "Video":
             jobs[job_id]["stage"] = "Extracting video keyframes and analyzing frame sequences..."
             jobs[job_id]["progress"] = 45
-            raw_result = analyze_video(file_path)
         else:
             jobs[job_id]["stage"] = "Vision agent extracting micro-anomalies and critic jury evaluating..."
             jobs[job_id]["progress"] = 50
-            raw_result = analyze_media(file_path, content_type, media_type=media_type)
 
-        elapsed = round(time.time() - start_time, 2)
-
-        # Normalize result for consistent frontend consumption
-        vote_breakdown = raw_result.get("vote_breakdown", {})
-        votes_list = []
-        if isinstance(vote_breakdown, dict):
-            for model_name, info in vote_breakdown.items():
-                if isinstance(info, dict):
-                    votes_list.append({
-                        "model": model_name,
-                        "vote": info.get("classification", "Unknown"),
-                        "conf": info.get("confidence", 0.0)
-                    })
-
-        formatted_result = {
-            "classification": raw_result.get("classification", "Unknown"),
-            "confidence": raw_result.get("confidence_score", 0.0),
-            "confidence_score": raw_result.get("confidence_score", 0.0),
-            "reason": raw_result.get("reason", ""),
-            "vision_findings": raw_result.get("vision_findings", ""),
-            "votes": votes_list,
-            "vote_breakdown": vote_breakdown,
-            "consensus": raw_result.get("consensus", "majority"),
-            "calibration": raw_result.get("calibration", ""),
-            "elapsed_seconds": elapsed,
-            "media_type": media_type
-        }
+        formatted_result = execute_agent_analysis(file_path, media_type, content_type)
+        elapsed = formatted_result["elapsed_seconds"]
 
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["progress"] = 100
@@ -168,6 +180,90 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
                 os.remove(file_path)
             except Exception:
                 pass
+
+def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
+    """Processes batch items sequentially to prevent memory spikes on free tiers (512MB RAM)."""
+    batch = batches.get(batch_id)
+    if not batch:
+        return
+
+    batch["status"] = "processing"
+    batch["updated_at"] = time.time()
+
+    fake_count = 0
+    real_count = 0
+    error_count = 0
+    total_conf = 0.0
+    processed_count = 0
+    total = len(file_specs)
+
+    for idx, spec in enumerate(file_specs):
+        file_path = spec["file_path"]
+        filename = spec["filename"]
+        media_type = spec["media_type"]
+        content_type = spec["content_type"]
+
+        item_entry = batch["items"][idx]
+        item_entry["status"] = "processing"
+        batch["stage"] = f"Processing item {idx + 1} of {total}: {filename}"
+        batch["progress"] = int((idx / total) * 100)
+        batch["updated_at"] = time.time()
+
+        try:
+            formatted_result = execute_agent_analysis(file_path, media_type, content_type)
+            item_entry["status"] = "completed"
+            item_entry["result"] = formatted_result
+            classification = formatted_result.get("classification", "Unknown")
+            conf = float(formatted_result.get("confidence", 0.0))
+
+            if classification.lower() == "fake":
+                fake_count += 1
+            elif classification.lower() == "real":
+                real_count += 1
+
+            total_conf += conf
+            processed_count += 1
+
+            try:
+                save_evaluation(
+                    filename=filename,
+                    media_type=media_type,
+                    ai_prediction=classification,
+                    confidence=conf,
+                    final_reasoning=formatted_result.get("reason", ""),
+                    vision_findings=formatted_result.get("vision_findings", ""),
+                    processing_time=formatted_result.get("elapsed_seconds", 0.0)
+                )
+            except Exception as dbe:
+                print(f"Batch db save notice: {dbe}")
+
+        except Exception as e:
+            error_count += 1
+            item_entry["status"] = "failed"
+            item_entry["error"] = str(e)
+        finally:
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+
+        batch["completed_items"] = idx + 1
+        batch["progress"] = int(((idx + 1) / total) * 100)
+        batch["summary"] = {
+            "total": total,
+            "processed": processed_count,
+            "fake_count": fake_count,
+            "real_count": real_count,
+            "error_count": error_count,
+            "avg_confidence": round(total_conf / processed_count, 3) if processed_count > 0 else 0.0
+        }
+        batch["updated_at"] = time.time()
+
+    batch["status"] = "completed"
+    batch["stage"] = "Batch analysis complete"
+    batch["progress"] = 100
+    batch["updated_at"] = time.time()
 
 async def run_analysis_pipeline_from_url(job_id: str, media_url: str, media_type: str, content_type: str, filename: str):
     """Downloads remote file in stream chunks before dispatching to pipeline."""
@@ -208,8 +304,10 @@ def root():
         "endpoints": {
             "health": "/api/health",
             "submit_upload_job": "POST /api/analyze",
+            "submit_batch_job": "POST /api/batch/analyze",
             "submit_url_job": "POST /api/analyze-url",
-            "job_status": "GET /api/jobs/{job_id}"
+            "job_status": "GET /api/jobs/{job_id}",
+            "batch_status": "GET /api/batch/{batch_id}"
         }
     }
 
@@ -221,7 +319,8 @@ def health_check():
         "status": "healthy",
         "service": "FraudSight AI API",
         "storage_configured": is_storage_configured(),
-        "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]])
+        "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]]),
+        "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]])
     }
 
 @app.post("/api/storage/presigned-url")
@@ -339,6 +438,100 @@ def get_job_status(job_id: str):
         "elapsed_seconds": elapsed,
         "result": job.get("result"),
         "error": job.get("error")
+    }
+
+@app.post("/api/batch/analyze")
+async def create_batch_job(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
+    """Accepts multiple evidence files and processes them sequentially in background without OOM."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    valid_files = [f for f in files if f.filename and len(f.filename.strip()) > 0]
+    if not valid_files:
+        raise HTTPException(status_code=400, detail="No valid files provided")
+
+    cleanup_old_jobs()
+    batch_id = str(uuid.uuid4())
+    file_specs = []
+    items = []
+
+    for i, file in enumerate(valid_files):
+        safe_filename = f"batch_{batch_id}_{i}_{os.path.basename(file.filename)}"
+        file_path = os.path.join(TEMP_DIR, safe_filename)
+
+        try:
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save upload '{file.filename}': {e}")
+
+        media_type, content_type = detect_media_type(file.filename, file.content_type or "")
+
+        file_specs.append({
+            "file_path": file_path,
+            "filename": file.filename,
+            "media_type": media_type,
+            "content_type": content_type
+        })
+
+        items.append({
+            "item_id": i,
+            "filename": file.filename,
+            "media_type": media_type,
+            "status": "queued",
+            "result": None,
+            "error": None
+        })
+
+    batches[batch_id] = {
+        "batch_id": batch_id,
+        "status": "queued",
+        "stage": f"Queued {len(valid_files)} evidence files for batch evaluation...",
+        "total_items": len(valid_files),
+        "completed_items": 0,
+        "progress": 0,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "summary": {
+            "total": len(valid_files),
+            "processed": 0,
+            "fake_count": 0,
+            "real_count": 0,
+            "error_count": 0,
+            "avg_confidence": 0.0
+        },
+        "items": items
+    }
+
+    background_tasks.add_task(run_batch_pipeline, batch_id, file_specs)
+
+    return {
+        "batch_id": batch_id,
+        "status": "queued",
+        "total_files": len(valid_files),
+        "message": f"Batch analysis of {len(valid_files)} items started in background. Poll /api/batch/{batch_id} for progress."
+    }
+
+@app.get("/api/batch/{batch_id}")
+def get_batch_status(batch_id: str):
+    cleanup_old_jobs()
+    batch = batches.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found or expired")
+
+    now = time.time()
+    elapsed = round(now - batch.get("created_at", now), 1)
+
+    return {
+        "batch_id": batch_id,
+        "status": batch["status"],
+        "stage": batch.get("stage", ""),
+        "total_items": batch["total_items"],
+        "completed_items": batch["completed_items"],
+        "progress": batch["progress"],
+        "elapsed_seconds": elapsed,
+        "summary": batch["summary"],
+        "items": batch["items"]
     }
 
 # Backward compatible synchronous endpoint
