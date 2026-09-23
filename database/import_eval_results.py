@@ -8,8 +8,8 @@ import re
 import sqlite3
 
 # Configuration
-RESULTS_FILE = "/home/aditya/Downloads/Hackathon/new_evaluation_results.txt"
-DB_PATH = "/home/aditya/Downloads/Hackathon/database/fraud_detection.db"
+RESULTS_FILE = os.environ.get("RESULTS_FILE_PATH") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "new_evaluation_results.txt"))
+DB_PATH = os.environ.get("DATABASE_PATH") or os.path.join(os.path.dirname(__file__), "fraud_detection.db")
 
 # The results came from this directory on a teammate's machine
 SOURCE_DIR = r"D:\Stevens Hackathon\real\Real"

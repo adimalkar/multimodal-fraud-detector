@@ -7,4 +7,5 @@ uvicorn
 fastapi
 httpx
 python-multipart
+boto3
 # Cache Buster: 1772759748

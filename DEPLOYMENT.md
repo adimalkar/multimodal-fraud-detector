@@ -71,13 +71,59 @@ The backend has been upgraded to a dedicated FastAPI server with non-blocking ba
 - `GET /api/jobs/{job_id}`: Poll endpoint returning live progress percentage, stage, and full multi-agent jury results.
 - `POST /analyze_media`: Synchronous endpoint for legacy integrations.
 
-### Running Backend Locally:
-```bash
-uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
-```
+---
 
-### Running Frontend Locally:
+## Layer 2: Cloudflare R2 Object Storage (10 GB Free, $0 Egress)
+
+When processing large videos (50MB–200MB), uploading directly to object storage bypasses container RAM limits completely.
+
+1. Create a free account at [cloudflare.com](https://dash.cloudflare.com) and navigate to **R2**.
+2. Click **"Create Bucket"** and name it (e.g. `fraud-evidence`).
+3. Under **"Manage R2 API Tokens"**, create an API token with *Object Read & Write* permissions.
+4. Add these environment variables to your backend:
+   ```bash
+   R2_ACCOUNT_ID="your_account_id"
+   R2_ACCESS_KEY_ID="your_access_key"
+   R2_SECRET_ACCESS_KEY="your_secret_key"
+   R2_BUCKET_NAME="fraud-evidence"
+   R2_ENDPOINT_URL="https://<account_id>.r2.cloudflarestorage.com"
+   ```
+5. The backend automatically exposes:
+   - `POST /api/storage/presigned-url`: Generates a direct presigned PUT upload URL.
+   - `POST /api/analyze-url`: Takes the public/presigned file URL and streams it in chunks.
+
+*Note: If R2 is not configured, the backend automatically falls back to direct multipart upload via `POST /api/analyze`.*
+
+---
+
+## Layer 3, Option A: Deploying Backend to Hugging Face Spaces (16 GB RAM Free!)
+
+Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 30x more RAM than Render's 512 MB tier.
+
+1. Go to [huggingface.co/spaces](https://huggingface.co/spaces) and click **"Create new Space"**.
+2. Settings:
+   - **Space name**: `multimodal-fraud-detector`
+   - **License**: MIT
+   - **Space SDK**: **Docker** (Blank)
+   - **Space hardware**: Free (2 vCPU, 16 GB RAM)
+3. Set Space Secrets in **Settings → Variables and Secrets**:
+   - `OPENROUTER_API_KEY`: your OpenRouter API key
+   - `FEATHERLESS_API_KEY`: your Featherless API key (optional)
+4. Push or mirror this repository:
+   ```bash
+   git remote add space https://huggingface.co/spaces/YOUR_USERNAME/multimodal-fraud-detector
+   git push space main
+   ```
+5. Hugging Face builds the included `Dockerfile` and serves your FastAPI backend on port 7860!
+
+---
+
+### Running Locally:
 ```bash
+# 1. Start Backend API
+uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+
+# 2. Start Next.js Frontend
 cd frontend
 npm run dev
 ```

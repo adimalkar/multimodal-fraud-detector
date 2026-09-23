@@ -2,8 +2,8 @@ import sqlite3
 import csv
 import os
 
-DB_PATH = "/home/aditya/Downloads/Hackathon/database/fraud_detection.db"
-CSV_PATH = "/home/aditya/Downloads/Hackathon/database/fraud_detection_report.csv"
+DB_PATH = os.environ.get("DATABASE_PATH") or os.path.join(os.path.dirname(__file__), "fraud_detection.db")
+CSV_PATH = os.environ.get("CSV_REPORT_PATH") or os.path.join(os.path.dirname(__file__), "fraud_detection_report.csv")
 
 def export_to_csv():
     # 1. Connect to the SQLite Database

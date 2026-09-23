@@ -109,7 +109,7 @@ def extract_video_frames(video_path, num_frames=5, max_size=(800, 800)):
     return frames_b64
 
 def get_few_shot_examples():
-    base_dir = "/home/aditya/Downloads/Hackathon/Chubb_Data"
+    base_dir = os.environ.get("CHUBB_DATA_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Chubb_Data"))
     fake_dir = os.path.join(base_dir, "Fake")
     real_dir = os.path.join(base_dir, "Real")
     
