@@ -72,3 +72,17 @@ def test_analyze_url_endpoint(client):
     data = response.json()
     assert "job_id" in data
     assert data["status"] == "queued"
+
+def test_analytics_stats_endpoint(client):
+    response = client.get("/api/analytics/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert "total_records" in data
+    assert "flagged_rate_percentage" in data
+    assert "media_counts" in data
+
+def test_analytics_csv_export(client):
+    response = client.get("/api/analytics/export-csv")
+    assert response.status_code == 200
+    assert "text/csv" in response.headers["content-type"]
+    assert "File Name" in response.text

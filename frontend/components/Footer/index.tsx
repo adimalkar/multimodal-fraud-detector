@@ -24,6 +24,12 @@ const Footer = () => {
                             Analyze
                         </Link>
                         <Link
+                            href="/analytics"
+                            className="text-white/70 hover:text-white text-xs md:text-sm transition"
+                        >
+                            Analytics
+                        </Link>
+                        <Link
                             href="#how-it-works"
                             className="text-white/70 hover:text-white text-xs md:text-sm transition"
                         >
