@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef } from "react";
+import Link from "next/link";
 import Button from "../Button";
 import starsBg from "@/public/imgs/stars.png";
 import { motion, useScroll, useTransform } from "framer-motion";
@@ -57,7 +58,9 @@ const Hero = () => {
                     Multi-Agent Insurance Fraud Detection. Zero-trust pipeline powered by Qwen and DeepSeek for Images, Documents, and Video.
                 </p>
                 <div className="flex justify-center mt-5">
-                    <Button onClick={() => document.getElementById('app-interface')?.scrollIntoView({ behavior: 'smooth' })}>Start Scanning</Button>
+                    <Link href="/analyze">
+                        <Button>Start Scanning</Button>
+                    </Link>
                 </div>
             </div>
         </motion.section>

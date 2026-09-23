@@ -2,6 +2,7 @@
 
 import { RefObject, useCallback, useEffect, useRef } from "react";
 import { motion, useMotionTemplate, useMotionValue, useScroll, useTransform } from "framer-motion";
+import Link from "next/link";
 import Button from "../Button";
 import starsBg from "@/public/imgs/stars.png";
 import gridLines from "@/public/imgs/grid-lines.png";
@@ -73,14 +74,16 @@ const CTA = () => {
                         }}
                     />
                     <div className="relative">
-                        <h2 className="text-5xl md:text-6xl max-w-sm mx-auto tracking-tighter text-center font-medium">
-                            AI-driven SEO for everyone
+                        <h2 className="text-5xl md:text-6xl max-w-lg mx-auto tracking-tighter text-center font-medium">
+                            Ready to verify your evidence?
                         </h2>
                         <p className="text-center text-lg md:text-xl max-w-xs mx-auto text-white/70 px-4 mt-5 tracking-tight">
-                            Detect synthetic media and tampered documents instantly.
+                            Detect deepfakes, forged documents, and tampered videos instantly.
                         </p>
                         <div className="flex justify-center mt-8">
-                            <Button>Analyze File Now</Button>
+                            <Link href="/analyze">
+                                <Button>Start Scanning Now</Button>
+                            </Link>
                         </div>
                     </div>
                 </motion.div>

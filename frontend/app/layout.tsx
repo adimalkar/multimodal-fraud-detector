@@ -6,8 +6,8 @@ import { twMerge } from "tailwind-merge";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-	title: "AI Startup Landing Page",
-	description: "A landing page for an AI startup created with Frontend Tribe",
+	title: "FraudSight AI — Multi-Agent Fraud Detection",
+	description: "Zero-trust multi-agent insurance fraud detection for images, documents, and video. Powered by Qwen-VL, DeepSeek R1, and GLM.",
 };
 
 const RootLayout = ({
@@ -16,7 +16,7 @@ const RootLayout = ({
 	children: React.ReactNode;
 }>) => {
 	return (
-		<html lang="pt-BR">
+		<html lang="en">
 			<body
 				className={twMerge(inter.className, "bg-black text-white antialiased")}
 			>
