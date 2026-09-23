@@ -20,6 +20,7 @@ const Header = () => {
                         <nav className="flex gap-8 text-sm">
                             <Link href="/#pipeline" className="text-white/70 hover:text-white transition">Pipeline</Link>
                             <Link href="/analyze" className="text-white/70 hover:text-white transition">Analyze</Link>
+                            <Link href="/analytics" className="text-white/70 hover:text-white transition">Analytics</Link>
                             <Link href="/#how-it-works" className="text-white/70 hover:text-white transition">How It Works</Link>
                         </nav>
                     </div>

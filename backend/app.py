@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -24,6 +24,21 @@ except ImportError:
         generate_presigned_upload_url,
         is_storage_configured,
         download_file_stream
+    )
+
+try:
+    from backend.db_service import (
+        save_evaluation,
+        get_analytics_summary,
+        get_evaluations_list,
+        export_evaluations_csv
+    )
+except ImportError:
+    from db_service import (
+        save_evaluation,
+        get_analytics_summary,
+        get_evaluations_list,
+        export_evaluations_csv
     )
 
 app = FastAPI(
@@ -125,6 +140,21 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
         jobs[job_id]["stage"] = "Analysis complete"
         jobs[job_id]["result"] = formatted_result
         jobs[job_id]["updated_at"] = time.time()
+
+        # Automatically persist to database for analytics dashboard
+        try:
+            filename = jobs[job_id].get("filename", "evidence_file")
+            save_evaluation(
+                filename=filename,
+                media_type=media_type,
+                ai_prediction=formatted_result["classification"],
+                confidence=formatted_result["confidence"],
+                final_reasoning=formatted_result["reason"],
+                vision_findings=formatted_result.get("vision_findings", ""),
+                processing_time=elapsed
+            )
+        except Exception as db_err:
+            print(f"Database save notice: {db_err}")
 
     except Exception as e:
         jobs[job_id]["status"] = "failed"
@@ -336,6 +366,30 @@ async def analyze_media_sync(file: UploadFile = File(...)):
                 os.remove(file_path)
             except Exception:
                 pass
+
+# Analytics & Reporting endpoints
+@app.get("/api/analytics/stats")
+def get_analytics_stats():
+    cleanup_old_jobs()
+    return get_analytics_summary()
+
+@app.get("/api/analytics/evaluations")
+def get_evaluations(limit: int = 50, offset: int = 0):
+    cleanup_old_jobs()
+    return {
+        "evaluations": get_evaluations_list(limit=limit, offset=offset),
+        "limit": limit,
+        "offset": offset
+    }
+
+@app.get("/api/analytics/export-csv")
+def download_evaluations_csv():
+    csv_data = export_evaluations_csv()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=fraud_detection_report.csv"}
+    )
 
 if __name__ == "__main__":
     import uvicorn
