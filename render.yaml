@@ -3,4 +3,4 @@ services:
     name: multimodal-fraud-detector
     env: python
     buildCommand: "pip install -r requirements.txt && python database/init_db.py"
-    startCommand: "bash -c '(while true; do sleep 600; curl -s https://multimodal-fraud-detector-1.onrender.com/ > /dev/null || true; done) & exec streamlit run app.py --server.port $PORT'"
+    startCommand: "bash -c '(sleep 60 && while true; do curl -sf https://multimodal-fraud-detector-1.onrender.com/ > /dev/null || true; sleep 300; done) & exec streamlit run app.py --server.port $PORT'"
