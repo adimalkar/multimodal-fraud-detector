@@ -1,4 +1,4 @@
-name: Production CI Pipeline
+name: Python CI
 
 on:
   push:
@@ -12,7 +12,6 @@ concurrency:
 
 jobs:
   build-and-lint:
-    name: Backend CI (Lint, Imports & Pytest Suite)
     runs-on: ubuntu-latest
     
     steps:
