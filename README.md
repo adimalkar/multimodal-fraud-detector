@@ -225,6 +225,8 @@ python scripts/check_backend.py http://localhost:8000 --allow-unconfigured
 ```
 The check validates JSON response bodies and the OpenAPI route list, so a different app returning `200` HTML does not pass.
 
+Run `python scripts/check_media_pipeline.py --preprocess-only` to verify local image, PDF, and video decoding. Once `/api/ready` succeeds, run `python scripts/check_media_pipeline.py http://localhost:8000` for provider-backed jobs in all three formats. This uses synthetic evidence, calls the configured model providers, and checks that each job returns a structured result; it does not measure detection accuracy.
+
 ---
 
 ## Automated Verification & CI/CD

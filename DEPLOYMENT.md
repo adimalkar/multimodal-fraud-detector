@@ -119,11 +119,14 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
 
 ### Option B: Deploying Backend to Render (Free Web Service)
 
-The repo includes `render.yaml` with automated health self-pings:
+The repo includes `render.yaml` for a Python FastAPI web service:
 1. Connect your repository on [dashboard.render.com](https://dashboard.render.com).
-2. Choose **Web Service** with Python environment (`uvicorn backend.app:app --host 0.0.0.0 --port $PORT`).
-3. Set both model provider keys (`OPENROUTER_API_KEY` and `FEATHERLESS_API_KEY`), plus any optional database and storage settings.
+2. Sync the Blueprint, or configure an existing **Web Service** to use the Python runtime, `pip install -r requirements.txt && python database/init_db.py` build command, `uvicorn backend.app:app --host 0.0.0.0 --port $PORT` start command, and `/api/health` health check path. Verify the existing service's linked repository and branch in the Render dashboard; a repository YAML change alone does not update a manually configured service.
+3. Set both model provider keys (`OPENROUTER_API_KEY` and `FEATHERLESS_API_KEY`) as Render secrets, plus any optional database and storage settings. Never commit the key values.
 4. Run `python scripts/check_backend.py https://YOUR-BACKEND-URL` from a checkout after deployment. This checks JSON health and readiness responses and the OpenAPI route list; an unrelated app returning HTTP 200 will fail the check.
+5. Run `python scripts/check_media_pipeline.py --preprocess-only` to check local image, PDF, and video preprocessing. With a ready backend and provider keys, run `python scripts/check_media_pipeline.py https://YOUR-BACKEND-URL` to submit synthetic evidence in all three formats and poll each job. This checks execution and result shape, not fraud detection accuracy. The full run makes paid provider calls and stores three synthetic evaluations.
+
+The `Verify deployed backend` GitHub Actions workflow checks the configured Render URL daily and can be run manually with a different backend URL. It fails when the URL serves Streamlit HTML or the API is unconfigured. GitHub Actions secrets are not needed for this read-only deployment check. The manual `run_media_pipeline` option runs the synthetic three-format check against a ready backend and uses provider credits.
 
 ---
 
