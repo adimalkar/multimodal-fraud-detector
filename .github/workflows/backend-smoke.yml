@@ -1,0 +1,48 @@
+name: Verify deployed backend
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+    inputs:
+      backend_url:
+        description: Backend origin to verify
+        required: true
+        default: https://multimodal-fraud-detector-1.onrender.com
+      allow_unconfigured:
+        description: Accept a backend without model credentials
+        type: boolean
+        default: false
+      run_media_pipeline:
+        description: Submit synthetic image, PDF, and video jobs (uses provider credits)
+        type: boolean
+        default: false
+
+jobs:
+  verify-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Verify API identity and readiness
+        env:
+          BACKEND_URL: ${{ inputs.backend_url || 'https://multimodal-fraud-detector-1.onrender.com' }}
+          ALLOW_UNCONFIGURED: ${{ inputs.allow_unconfigured }}
+        run: |
+          if [ "$ALLOW_UNCONFIGURED" = "true" ]; then
+            python scripts/check_backend.py "$BACKEND_URL" --allow-unconfigured
+          else
+            python scripts/check_backend.py "$BACKEND_URL"
+          fi
+      - name: Install media check dependencies
+        if: ${{ inputs.run_media_pipeline == true }}
+        run: |
+          sudo apt-get update && sudo apt-get install -y poppler-utils
+          python -m pip install requests pillow opencv-python-headless numpy python-dotenv
+      - name: Verify provider-backed media jobs
+        if: ${{ inputs.run_media_pipeline == true }}
+        env:
+          BACKEND_URL: ${{ inputs.backend_url }}
+        run: python scripts/check_media_pipeline.py "$BACKEND_URL"
