@@ -11,18 +11,19 @@ This guide documents the decoupled, production-grade architecture for **FraudSig
 │  Hosted on: VERCEL (Free Tier)               │
 │  - Unlimited global edge CDN & assets        │
 │  - Instant page load, zero cold start        │
-│  - Handles upload UI & poll updates          │
+│  - Staging UI, single & batch analysis       │
+│  - Real-time analytics dashboard             │
 └──────────────┬───────────────────────────────┘
                │
                │ Direct Presigned Upload (Bypasses API memory)
                ▼
 ┌──────────────────────────────────────────────┐
 │  Layer 2: Media Storage (Videos / PDFs)      │
-│  Hosted on: CLOUDFLARE R2 or SUPABASE        │
+│  Hosted on: CLOUDFLARE R2 or S3              │
 │  - 10 GB Free Storage, $0 Egress fees        │
 └──────────────┬───────────────────────────────┘
                │
-               │ Triggers analysis job
+               │ Triggers asynchronous analysis job
                ▼
 ┌──────────────────────────────────────────────┐
 │  Layer 3: AI Backend Engine (FastAPI)        │
@@ -31,20 +32,25 @@ This guide documents the decoupled, production-grade architecture for **FraudSig
 │    • Built for OpenCV, Video, & Python AI    │
 │  Option B: Render / Koyeb (API-only)         │
 │    • Reserved 100% for Python (No Node.js)   │
+│  - In-memory rate limiting & file validation │
+│  - Multi-agent jury (Qwen-VL + LLM critics)  │
+│  - Multimodal risk scoring engine            │
 └──────────────┬───────────────────────────────┘
                │
-               ▼ Async Task / Job Status
+               ▼
 ┌──────────────────────────────────────────────┐
-│  Layer 4: Async Job Processing               │
-│  - POST /api/analyze -> returns { job_id }   │
-│  - Frontend polls GET /api/jobs/{job_id}     │
-│  - Prevents 100s HTTP Gateway Timeouts       │
+│  Layer 4: Database Persistence               │
+│  Hosted on: SUPABASE / NEON (PostgreSQL)     │
+│  Fallback: Local SQLite file                 │
+│  - Permanent claim & audit trail history     │
+│  - Aggregated risk statistics & metrics      │
+│  - CSV export for SIU fraud investigators    │
 └──────────────────────────────────────────────┘
 ```
 
 ---
 
-## Layer 1: Deploying the Next.js Frontend to Vercel (Free)
+## Layer 1: Deploying Next.js Frontend to Vercel (Free)
 
 1. Go to [vercel.com](https://vercel.com) and log in with your GitHub account.
 2. Click **"Add New..."** → **"Project"**.
@@ -53,29 +59,19 @@ This guide documents the decoupled, production-grade architecture for **FraudSig
    - **Framework Preset**: Next.js
    - **Root Directory**: Click "Edit" and choose `frontend`
    - **Environment Variables**:
-     - `NEXT_PUBLIC_API_URL`: Your backend API URL (e.g. `https://multimodal-fraud-detector-1.onrender.com`)
+     - `NEXT_PUBLIC_API_URL`: Your backend API URL (e.g. `https://multimodal-fraud-detector-1.onrender.com` or your Hugging Face Space URL)
 5. Click **"Deploy"**.
 
 **Benefits:**
 - 0s cold starts (instant global CDN delivery).
-- Does not consume Python server RAM or CPU.
+- Zero consumption of Python server RAM or CPU.
 - Automatically rebuilds on git push.
-
----
-
-## Layer 3: AI Backend Engine (FastAPI)
-
-The backend has been upgraded to a dedicated FastAPI server with non-blocking background task execution:
-- `GET /api/health`: Health check (used by keepalive loops).
-- `POST /api/analyze`: Non-blocking job submission, returns a `job_id` in <100ms.
-- `GET /api/jobs/{job_id}`: Poll endpoint returning live progress percentage, stage, and full multi-agent jury results.
-- `POST /analyze_media`: Synchronous endpoint for legacy integrations.
 
 ---
 
 ## Layer 2: Cloudflare R2 Object Storage (10 GB Free, $0 Egress)
 
-When processing large videos (50MB–200MB), uploading directly to object storage bypasses container RAM limits completely.
+When processing large videos (50MB–200MB) or PDFs, uploading directly to object storage bypasses container RAM limits completely.
 
 1. Create a free account at [cloudflare.com](https://dash.cloudflare.com) and navigate to **R2**.
 2. Click **"Create Bucket"** and name it (e.g. `fraud-evidence`).
@@ -96,7 +92,9 @@ When processing large videos (50MB–200MB), uploading directly to object storag
 
 ---
 
-## Layer 3, Option A: Deploying Backend to Hugging Face Spaces (16 GB RAM Free!)
+## Layer 3: AI Backend Engine (FastAPI)
+
+### Option A (Recommended): Deploying Backend to Hugging Face Spaces (16 GB RAM Free!)
 
 Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 30x more RAM than Render's 512 MB tier.
 
@@ -109,22 +107,85 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
 3. Set Space Secrets in **Settings → Variables and Secrets**:
    - `OPENROUTER_API_KEY`: your OpenRouter API key
    - `FEATHERLESS_API_KEY`: your Featherless API key (optional)
+   - `DATABASE_URL`: your Supabase/Neon PostgreSQL URL (optional)
 4. Push or mirror this repository:
    ```bash
    git remote add space https://huggingface.co/spaces/YOUR_USERNAME/multimodal-fraud-detector
    git push space main
    ```
-5. Hugging Face builds the included `Dockerfile` and serves your FastAPI backend on port 7860!
+5. Hugging Face builds the included `Dockerfile` and serves your FastAPI backend on port 8000!
 
 ---
 
-### Running Locally:
+### Option B: Deploying Backend to Render (Free Web Service)
+
+The repo includes `render.yaml` with automated health self-pings:
+1. Connect your repository on [dashboard.render.com](https://dashboard.render.com).
+2. Choose **Web Service** with Python environment (`uvicorn backend.app:app --host 0.0.0.0 --port $PORT`).
+3. Set environment variables (`OPENROUTER_API_KEY`, `DATABASE_URL`, etc.).
+
+---
+
+## Layer 4: Cloud PostgreSQL Database (Supabase / Neon Free Tier)
+
+FraudSight AI supports both cloud PostgreSQL and local SQLite:
+- If `DATABASE_URL` is set, the system automatically uses PostgreSQL with pooled connection handling.
+- If `DATABASE_URL` is omitted, it gracefully falls back to local SQLite at `database/fraud_detection.db`.
+
+### Supabase Setup (Free Tier):
+1. Sign up at [supabase.com](https://supabase.com) and create a free project.
+2. In **Project Settings → Database**, copy the **URI** connection string.
+3. Replace `[YOUR-PASSWORD]` with your database password:
+   ```bash
+   DATABASE_URL="postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres"
+   ```
+4. Add `DATABASE_URL` to your backend environment variables. FraudSight AI will automatically create all tables and schema migrations on startup.
+
+---
+
+## Layer 5: Production Guardrails & Free-Tier Protections
+
+To protect free-tier servers from container crashes (Exit 137 OOM) and API quota exhaustion:
+
+1. **In-Memory Rate Limiting**:
+   - Implements a sliding-window algorithm per client IP.
+   - Configurable via `RATE_LIMIT_PER_MINUTE` (default: 60 requests/minute).
+   - Returns standard `HTTP 429 Too Many Requests` with `Retry-After` header.
+
+2. **File Size & Type Validation**:
+   - Configurable max file size via `MAX_FILE_SIZE_MB` (default: 50MB). Returns `HTTP 413 Payload Too Large`.
+   - Permitted extensions: `jpg`, `jpeg`, `png`, `webp`, `pdf`, `mp4`, `avi`, `mov`, `mkv`, `webm`. Returns `HTTP 415 Unsupported Media Type` for unallowed files.
+
+3. **Sequential Zero-OOM Batch Processing**:
+   - Capped at `MAX_BATCH_SIZE` (default: 10 items) per batch submission.
+   - Files are evaluated sequentially in the background thread pool, immediately freeing file handles and disk buffers in `finally:` blocks.
+
+---
+
+## Local Development Quickstart
+
 ```bash
-# 1. Start Backend API
+# 1. Clone repository
+git clone https://github.com/adimalkar/multimodal-fraud-detector.git
+cd multimodal-fraud-detector
+
+# 2. Setup Python virtual environment
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env with your OPENROUTER_API_KEY
+
+# 4. Start Backend API
 uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
-# 2. Start Next.js Frontend
+# 5. Start Next.js Frontend (in a second terminal)
 cd frontend
+cp .env.local.example .env.local
+npm install
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000).
+
+Visit [http://localhost:3000](http://localhost:3000) for the frontend and [http://localhost:8000/docs](http://localhost:8000/docs) for the interactive Swagger API documentation.

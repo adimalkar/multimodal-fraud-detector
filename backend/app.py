@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -7,6 +7,29 @@ import uuid
 import time
 import asyncio
 from typing import Dict, Any, Optional, List
+
+try:
+    from backend.guardrails import (
+        enforce_rate_limit,
+        validate_file_extension,
+        validate_file_size,
+        validate_batch_size,
+        rate_limiter,
+        MAX_FILE_SIZE_MB,
+        MAX_BATCH_SIZE,
+        ALLOWED_EXTENSIONS,
+    )
+except ImportError:
+    from guardrails import (
+        enforce_rate_limit,
+        validate_file_extension,
+        validate_file_size,
+        validate_batch_size,
+        rate_limiter,
+        MAX_FILE_SIZE_MB,
+        MAX_BATCH_SIZE,
+        ALLOWED_EXTENSIONS,
+    )
 
 try:
     from backend.qwen_agent import analyze_media, analyze_video
@@ -363,9 +386,14 @@ async def run_analysis_pipeline_from_url(job_id: str, media_url: str, media_type
 def root():
     return {
         "service": "FraudSight AI Engine",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "status": "online",
         "docs": "/docs",
+        "guardrails": {
+            "max_file_size_mb": MAX_FILE_SIZE_MB,
+            "max_batch_size": MAX_BATCH_SIZE,
+            "allowed_extensions": sorted(list(ALLOWED_EXTENSIONS))
+        },
         "storage": {
             "configured": is_storage_configured(),
             "presigned_upload": "POST /api/storage/presigned-url"
@@ -376,7 +404,10 @@ def root():
             "submit_batch_job": "POST /api/batch/analyze",
             "submit_url_job": "POST /api/analyze-url",
             "job_status": "GET /api/jobs/{job_id}",
-            "batch_status": "GET /api/batch/{batch_id}"
+            "batch_status": "GET /api/batch/{batch_id}",
+            "analytics_stats": "GET /api/analytics/stats",
+            "analytics_evaluations": "GET /api/analytics/evaluations",
+            "analytics_export_csv": "GET /api/analytics/export-csv"
         }
     }
 
@@ -393,11 +424,13 @@ def health_check():
     }
 
 @app.post("/api/storage/presigned-url")
-def request_presigned_url(req: PresignedUrlRequest):
+def request_presigned_url(req: PresignedUrlRequest, request: Request):
     """
     Generates a pre-signed URL for direct browser uploads to Cloudflare R2 / S3.
     Bypasses API server RAM completely.
     """
+    enforce_rate_limit(request)
+    validate_file_extension(req.filename)
     return generate_presigned_upload_url(req.filename, req.content_type)
 
 @app.get("/api/storage/status")
@@ -409,10 +442,14 @@ def storage_status():
     }
 
 @app.post("/api/analyze")
-async def create_analysis_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def create_analysis_job(background_tasks: BackgroundTasks, request: Request, file: UploadFile = File(...)):
     """Accepts direct multipart file upload and enqueues background evaluation."""
+    enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+
+    validate_file_extension(file.filename)
+    validate_file_size(file)
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -452,13 +489,16 @@ async def create_analysis_job(background_tasks: BackgroundTasks, file: UploadFil
     }
 
 @app.post("/api/analyze-url")
-async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTasks, req: AnalyzeUrlRequest):
+async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTasks, req: AnalyzeUrlRequest, request: Request):
     """
     Initiates analysis on a media file stored in Cloudflare R2 / S3 / Supabase.
     Buffers the file in chunks without crashing 512MB RAM containers.
     """
+    enforce_rate_limit(request)
     if not req.media_url:
         raise HTTPException(status_code=400, detail="media_url is required")
+
+    validate_file_extension(req.filename or "evidence.jpg")
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -510,14 +550,18 @@ def get_job_status(job_id: str):
     }
 
 @app.post("/api/batch/analyze")
-async def create_batch_job(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
+async def create_batch_job(background_tasks: BackgroundTasks, request: Request, files: List[UploadFile] = File(...)):
     """Accepts multiple evidence files and processes them sequentially in background without OOM."""
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided")
+    enforce_rate_limit(request)
+    validate_batch_size(files)
 
     valid_files = [f for f in files if f.filename and len(f.filename.strip()) > 0]
     if not valid_files:
         raise HTTPException(status_code=400, detail="No valid files provided")
+
+    for f in valid_files:
+        validate_file_extension(f.filename)
+        validate_file_size(f)
 
     cleanup_old_jobs()
     batch_id = str(uuid.uuid4())
@@ -605,9 +649,13 @@ def get_batch_status(batch_id: str):
 
 # Backward compatible synchronous endpoint
 @app.post("/analyze_media")
-async def analyze_media_sync(file: UploadFile = File(...)):
+async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
+    enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+
+    validate_file_extension(file.filename)
+    validate_file_size(file)
 
     file_id = str(uuid.uuid4())
     file_path = os.path.join(TEMP_DIR, f"sync_{file_id}_{file.filename}")
