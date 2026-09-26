@@ -32,9 +32,9 @@ except ImportError:
     )
 
 try:
-    from backend.qwen_agent import analyze_media, analyze_video
+    from backend.qwen_agent import analyze_media, analyze_video, missing_model_credentials
 except ImportError:
-    from qwen_agent import analyze_media, analyze_video
+    from qwen_agent import analyze_media, analyze_video, missing_model_credentials
 
 try:
     from backend.storage import (
@@ -76,7 +76,7 @@ risk_scorer_engine = MultimodalRiskScorer()
 app = FastAPI(
     title="FraudSight AI Backend API",
     description="Multi-agent multimodal insurance fraud detection API with asynchronous job queuing and object storage support",
-    version="2.1.0"
+    version="2.2.0"
 )
 
 # Enable CORS for Next.js frontend (Vercel, localhost, and custom domains)
@@ -94,6 +94,20 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 # In-memory job and batch stores
 jobs: Dict[str, Dict[str, Any]] = {}
 batches: Dict[str, Dict[str, Any]] = {}
+
+
+def ensure_analysis_available():
+    """Reject analysis requests before staging files when providers are unconfigured."""
+    missing = missing_model_credentials()
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MODEL_PROVIDERS_UNCONFIGURED",
+                "message": "Analysis is unavailable until model provider credentials are configured.",
+                "missing_credentials": missing,
+            },
+        )
 
 class PresignedUrlRequest(BaseModel):
     filename: str
@@ -166,6 +180,8 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
 
     classification = raw_result.get("classification", "Unknown")
     confidence_score = float(raw_result.get("confidence_score", 0.0))
+    if classification.lower() not in {"real", "fake"}:
+        raise RuntimeError("Analysis did not return a valid Real or Fake verdict.")
 
     # 4. Multimodal risk heuristic calculation
     if classification.lower() == "fake":
@@ -352,8 +368,16 @@ def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
         }
         batch["updated_at"] = time.time()
 
-    batch["status"] = "completed"
-    batch["stage"] = "Batch analysis complete"
+    if processed_count == 0:
+        batch["status"] = "failed"
+        batch["stage"] = "All batch items failed analysis"
+        batch["error"] = "All batch items failed analysis. See item errors for details."
+    else:
+        batch["status"] = "completed"
+        batch["stage"] = (
+            f"Batch analysis complete with {error_count} failed item(s)"
+            if error_count else "Batch analysis complete"
+        )
     batch["progress"] = 100
     batch["updated_at"] = time.time()
 
@@ -400,6 +424,7 @@ def root():
         },
         "endpoints": {
             "health": "/api/health",
+            "readiness": "/api/ready",
             "submit_upload_job": "POST /api/analyze",
             "submit_batch_job": "POST /api/batch/analyze",
             "submit_url_job": "POST /api/analyze-url",
@@ -418,10 +443,18 @@ def health_check():
     return {
         "status": "healthy",
         "service": "FraudSight AI API",
+        "analysis_ready": not missing_model_credentials(),
         "storage_configured": is_storage_configured(),
         "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]]),
         "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]])
     }
+
+
+@app.get("/api/ready")
+def readiness_check():
+    """Report whether the configured model pipeline can accept analysis work."""
+    ensure_analysis_available()
+    return {"status": "ready", "analysis_ready": True}
 
 @app.post("/api/storage/presigned-url")
 def request_presigned_url(req: PresignedUrlRequest, request: Request):
@@ -450,6 +483,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    ensure_analysis_available()
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -499,6 +533,7 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
         raise HTTPException(status_code=400, detail="media_url is required")
 
     validate_file_extension(req.filename or "evidence.jpg")
+    ensure_analysis_available()
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -562,6 +597,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
     for f in valid_files:
         validate_file_extension(f.filename)
         validate_file_size(f)
+    ensure_analysis_available()
 
     cleanup_old_jobs()
     batch_id = str(uuid.uuid4())
@@ -613,6 +649,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
             "error_count": 0,
             "avg_confidence": 0.0
         },
+        "error": None,
         "items": items
     }
 
@@ -644,6 +681,7 @@ def get_batch_status(batch_id: str):
         "progress": batch["progress"],
         "elapsed_seconds": elapsed,
         "summary": batch["summary"],
+        "error": batch.get("error"),
         "items": batch["items"]
     }
 
@@ -656,6 +694,7 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    ensure_analysis_available()
 
     file_id = str(uuid.uuid4())
     file_path = os.path.join(TEMP_DIR, f"sync_{file_id}_{file.filename}")

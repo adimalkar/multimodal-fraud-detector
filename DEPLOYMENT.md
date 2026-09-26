@@ -106,7 +106,7 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
    - **Space hardware**: Free (2 vCPU, 16 GB RAM)
 3. Set Space Secrets in **Settings → Variables and Secrets**:
    - `OPENROUTER_API_KEY`: your OpenRouter API key
-   - `FEATHERLESS_API_KEY`: your Featherless API key (optional)
+   - `FEATHERLESS_API_KEY`: your Featherless API key (required for the current analysis pipeline)
    - `DATABASE_URL`: your Supabase/Neon PostgreSQL URL (optional)
 4. Push or mirror this repository:
    ```bash
@@ -122,14 +122,15 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
 The repo includes `render.yaml` with automated health self-pings:
 1. Connect your repository on [dashboard.render.com](https://dashboard.render.com).
 2. Choose **Web Service** with Python environment (`uvicorn backend.app:app --host 0.0.0.0 --port $PORT`).
-3. Set environment variables (`OPENROUTER_API_KEY`, `DATABASE_URL`, etc.).
+3. Set both model provider keys (`OPENROUTER_API_KEY` and `FEATHERLESS_API_KEY`), plus any optional database and storage settings.
+4. Run `python scripts/check_backend.py https://YOUR-BACKEND-URL` from a checkout after deployment. This checks JSON health and readiness responses and the OpenAPI route list; an unrelated app returning HTTP 200 will fail the check.
 
 ---
 
 ## Layer 4: Cloud PostgreSQL Database (Supabase / Neon Free Tier)
 
 FraudSight AI supports both cloud PostgreSQL and local SQLite:
-- If `DATABASE_URL` is set, the system automatically uses PostgreSQL with pooled connection handling.
+- If `DATABASE_URL` is set, the system uses PostgreSQL. Connections are opened per operation; pooling has not been added yet.
 - If `DATABASE_URL` is omitted, it gracefully falls back to local SQLite at `database/fraud_detection.db`.
 
 ### Supabase Setup (Free Tier):
@@ -176,7 +177,7 @@ pip install -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env with your OPENROUTER_API_KEY
+# Edit .env with both OPENROUTER_API_KEY and FEATHERLESS_API_KEY
 
 # 4. Start Backend API
 uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload

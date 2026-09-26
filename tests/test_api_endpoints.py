@@ -5,7 +5,8 @@ from starlette.testclient import TestClient
 from backend.app import app, jobs
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr("backend.app.missing_model_credentials", lambda: [])
     return TestClient(app)
 
 def test_health_check(client):
@@ -124,4 +125,3 @@ def test_batch_status_404(client):
     fake_id = str(uuid.uuid4())
     response = client.get(f"/api/batch/{fake_id}")
     assert response.status_code == 404
-

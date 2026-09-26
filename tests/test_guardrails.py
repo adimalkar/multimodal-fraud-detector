@@ -8,7 +8,8 @@ client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def reset_limiter():
+def reset_limiter(monkeypatch):
+    monkeypatch.setattr("backend.app.missing_model_credentials", lambda: [])
     rate_limiter.reset()
     yield
     rate_limiter.reset()
