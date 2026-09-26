@@ -45,6 +45,37 @@ const AppInterface = () => {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://multimodal-fraud-detector-1.onrender.com';
 
+  // --- Helper Tier and Action formatters ---
+  const formatSeverityTier = (tier?: string) => {
+    switch (tier) {
+      case 'CRITICAL_FRAUD':
+        return { label: 'CRITICAL FRAUD', color: 'bg-red-500/20 text-red-300 border-red-500/40 animate-pulse', icon: '🚨' };
+      case 'HIGH_RISK':
+        return { label: 'HIGH RISK', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40', icon: '⚠️' };
+      case 'SUSPICIOUS':
+        return { label: 'SUSPICIOUS', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40', icon: '🔍' };
+      case 'LOW_RISK':
+        return { label: 'LOW RISK', color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40', icon: '🛡️' };
+      default:
+        return { label: 'STANDARD', color: 'bg-white/10 text-white/70 border-white/20', icon: '📋' };
+    }
+  };
+
+  const formatPolicyAction = (action?: string) => {
+    switch (action) {
+      case 'BLOCK_TRANSACTION_AND_ALERT_SECURITY':
+        return 'Block Claim Transaction & Alert SIU';
+      case 'ESCALATE_TO_SENIOR_ANALYST_QUEUE':
+        return 'Escalate to Senior Fraud Analyst';
+      case 'REQUIRE_STEP_UP_MFA_AUTHENTICATION':
+        return 'Request Step-Up Evidence Verification';
+      case 'APPROVE_AUTOMATICALLY':
+        return 'Fast-Track Automated Approval';
+      default:
+        return 'Manual Claim Review Required';
+    }
+  };
+
   // --- Single Upload Handlers ---
   const handleSingleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -118,6 +149,32 @@ const AppInterface = () => {
             { model: 'DeepSeek R1', vote: 'Fake', conf: 0.98 },
             { model: 'GLM 4.6', vote: 'Real', conf: 0.60 },
           ],
+          multimodal_risk: {
+            risk_score: 0.945,
+            severity_tier: 'CRITICAL_FRAUD',
+            recommended_action: 'BLOCK_TRANSACTION_AND_ALERT_SECURITY',
+            cross_modal_synergy_applied: true,
+            breakdown: {
+              visual_contribution: 0.38,
+              text_contribution: 0.38,
+              metadata_contribution: 0.185,
+            },
+            metadata: {
+              format: 'JPEG',
+              dimensions: '1024x1024',
+              software: 'Adobe Photoshop 2024 (Macintosh)',
+              camera_make: 'Apple',
+              camera_model: 'iPhone 15 Pro',
+              created_at: '2026:09:20 14:10:05',
+              has_gps: false,
+            },
+            metadata_flags: [
+              'Post-processing or AI editing signature detected in metadata: Adobe Photoshop 2024',
+              'Image has exact square dimension (1024x1024) characteristic of AI generators',
+              'Original capture timestamp differs from modification timestamp',
+            ],
+            metadata_flags_count: 3,
+          }
         });
       }, 3500);
     }
@@ -206,7 +263,6 @@ const AppInterface = () => {
       }, 2000);
     } catch (err: any) {
       console.warn('API unavailable or in cold start, running simulated demo batch inspection:', err);
-      // Fallback demo simulation
       const mockItems: BatchItem[] = batchFiles.map((f, i) => ({
         item_id: i,
         filename: f.name,
@@ -224,7 +280,25 @@ const AppInterface = () => {
             { model: 'Qwen Turbo', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.92 },
             { model: 'DeepSeek R1', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.98 },
             { model: 'GLM 4.6', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.85 },
-          ]
+          ],
+          multimodal_risk: {
+            risk_score: i % 2 === 0 ? 0.94 : 0.12,
+            severity_tier: i % 2 === 0 ? 'CRITICAL_FRAUD' : 'LOW_RISK',
+            recommended_action: i % 2 === 0 ? 'BLOCK_TRANSACTION_AND_ALERT_SECURITY' : 'APPROVE_AUTOMATICALLY',
+            cross_modal_synergy_applied: i % 2 === 0,
+            breakdown: {
+              visual_contribution: i % 2 === 0 ? 0.38 : 0.05,
+              text_contribution: i % 2 === 0 ? 0.38 : 0.05,
+              metadata_contribution: i % 2 === 0 ? 0.18 : 0.02,
+            },
+            metadata: {
+              format: f.name.endsWith('.pdf') ? 'PDF' : 'JPEG',
+              software: i % 2 === 0 ? 'Canva' : 'Apple Camera Sensor',
+              dimensions: '1920x1080',
+            },
+            metadata_flags: i % 2 === 0 ? ['Editing signature detected in metadata: Canva'] : [],
+            metadata_flags_count: i % 2 === 0 ? 1 : 0,
+          }
         }
       }));
 
@@ -247,12 +321,15 @@ const AppInterface = () => {
 
   const handleDownloadBatchCSV = () => {
     if (batchItems.length === 0) return;
-    const headers = ['File Name', 'Media Type', 'Verdict', 'Confidence Score', 'Reasoning'];
+    const headers = ['File Name', 'Media Type', 'Verdict', 'Confidence Score', 'Risk Score', 'Severity Tier', 'Recommended Action', 'Reasoning'];
     const rows = batchItems.map(item => [
       `"${item.filename.replace(/"/g, '""')}"`,
       item.media_type,
       item.result?.classification || 'Unknown',
       item.result?.confidence ? (item.result.confidence * 100).toFixed(1) + '%' : '0%',
+      item.result?.multimodal_risk?.risk_score ? (item.result.multimodal_risk.risk_score * 100).toFixed(1) + '%' : '--',
+      item.result?.multimodal_risk?.severity_tier || 'N/A',
+      item.result?.multimodal_risk?.recommended_action || 'MANUAL_REVIEW',
       `"${(item.result?.reason || '').replace(/"/g, '""')}"`
     ]);
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -273,7 +350,7 @@ const AppInterface = () => {
           Verify Media Authenticity
         </h2>
         <p className="text-center text-white/60 text-sm md:text-base max-w-xl mx-auto mb-8">
-          Multi-agent forensic engine powered by Qwen-VL, DeepSeek R1, Qwen Turbo, and GLM.
+          Multi-agent forensic engine with multimodal risk scoring, EXIF analysis, and automated policy action recommendations.
         </p>
 
         {/* Mode Selector Tabs */}
@@ -344,7 +421,7 @@ const AppInterface = () => {
                 )}
               </div>
 
-              <Button onClick={handleSingleUpload} className="w-full justify-center">
+              <Button onClick={handleSingleUpload} disabled={analyzing} className="w-full justify-center">
                 {analyzing ? 'Agents Analyzing...' : 'Analyze Evidence'}
               </Button>
             </div>
@@ -392,22 +469,91 @@ const AppInterface = () => {
                       <div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                       <span><b>Critic 3 & Jury:</b> GLM 4.6 computing consensus & confidence</span>
                     </motion.div>
+                    <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 2.2 }} className="flex items-center gap-3 text-xs text-white/70">
+                      <div className="h-2 w-2 rounded-full bg-purple-400 animate-pulse" />
+                      <span><b>Risk Engine:</b> Multimodal risk scorer computing unified severity tier</span>
+                    </motion.div>
                   </div>
                 </div>
               )}
 
               {result && (
-                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col gap-6">
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="flex flex-col gap-5">
+                  
+                  {/* Verdict & Severity Card */}
                   <div className={`p-4 rounded-xl border ${result.classification === 'Fake' ? 'bg-red-500/10 border-red-500/30' : 'bg-green-500/10 border-green-500/30'}`}>
-                    <div className="text-xs font-bold tracking-widest uppercase text-white/50 mb-1">Final Verdict</div>
-                    <div className={`text-4xl font-bold ${result.classification === 'Fake' ? 'text-red-400' : 'text-green-400'}`}>
-                      {result.classification}
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="text-xs font-bold tracking-widest uppercase text-white/50">Verdict & Risk Tier</div>
+                      {result.multimodal_risk?.severity_tier && (() => {
+                        const tier = formatSeverityTier(result.multimodal_risk.severity_tier);
+                        return (
+                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${tier.color}`}>
+                            {tier.icon} {tier.label}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                    <div className="flex items-baseline justify-between">
+                      <div className={`text-4xl font-bold ${result.classification === 'Fake' ? 'text-red-400' : 'text-green-400'}`}>
+                        {result.classification}
+                      </div>
+                      {result.multimodal_risk && (
+                        <div className="text-right">
+                          <span className="text-[10px] text-white/50 block uppercase">Composite Risk</span>
+                          <span className="text-xl font-mono font-bold text-white">
+                            {(result.multimodal_risk.risk_score * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
+                  {/* Automated Policy Action Recommendation */}
+                  {result.multimodal_risk?.recommended_action && (
+                    <div className="p-3 rounded-xl bg-purple-950/30 border border-[#8c45ff]/30 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-lg">🛡️</span>
+                        <div>
+                          <span className="text-purple-400 block text-[10px] uppercase font-bold tracking-wider">Automated Policy Decision</span>
+                          <span className="text-white font-semibold">{formatPolicyAction(result.multimodal_risk.recommended_action)}</span>
+                        </div>
+                      </div>
+                      {result.multimodal_risk.cross_modal_synergy_applied && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/30 text-purple-200 border border-purple-500/40 font-mono font-semibold" title="Cross-modality compounding verification active">
+                          ⚡ 1.15x Synergy
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Modality Signal Breakdown */}
+                  {result.multimodal_risk?.breakdown && (
+                    <div>
+                      <div className="flex justify-between text-xs text-white/60 mb-1.5 font-medium">
+                        <span>Multimodal Heuristic Weights</span>
+                        <span>Compounded Signal</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                        <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                          <span className="text-white/40 block">Visual Model</span>
+                          <span className="font-bold text-blue-300">{(result.multimodal_risk.breakdown.visual_contribution * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                          <span className="text-white/40 block">Forensic NLP</span>
+                          <span className="font-bold text-purple-300">{(result.multimodal_risk.breakdown.text_contribution * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white/5 border border-white/10">
+                          <span className="text-white/40 block">Metadata Flags</span>
+                          <span className="font-bold text-amber-300">{(result.multimodal_risk.breakdown.metadata_contribution * 100).toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Confidence Score Bar */}
                   <div>
-                    <div className="flex justify-between text-sm mb-2">
-                      <span className="text-white/70">Confidence Score</span>
+                    <div className="flex justify-between text-sm mb-1.5">
+                      <span className="text-white/70">Jury Consensus Confidence</span>
                       <span className="font-bold text-white">{(result.confidence * 100).toFixed(1)}%</span>
                     </div>
                     <div className="h-2 bg-white/10 rounded-full overflow-hidden">
@@ -419,14 +565,15 @@ const AppInterface = () => {
                     </div>
                   </div>
 
+                  {/* Agent Jury Breakdown */}
                   <div>
-                    <div className="text-sm font-semibold mb-3 text-white">Agent Jury Breakdown</div>
-                    <div className="space-y-2">
+                    <div className="text-sm font-semibold mb-2.5 text-white">Agent Jury Breakdown</div>
+                    <div className="space-y-1.5">
                       {result.votes?.map((v: any, i: number) => (
                         <div key={i} className="flex items-center justify-between bg-white/5 p-2 rounded-md text-xs">
                           <span className="text-white/80">{v.model}</span>
                           <div className="flex items-center gap-2">
-                            <span className={`${v.vote === 'Fake' ? 'text-red-400' : 'text-green-400'}`}>{v.vote}</span>
+                            <span className={`${v.vote === 'Fake' ? 'text-red-400 font-semibold' : 'text-green-400 font-semibold'}`}>{v.vote}</span>
                             <span className="text-white/40">{(v.conf * 100).toFixed(0)}%</span>
                           </div>
                         </div>
@@ -434,7 +581,36 @@ const AppInterface = () => {
                     </div>
                   </div>
 
-                  <div className="text-sm text-white/80 leading-relaxed p-3 bg-[#190d2e] rounded-lg border border-[#8c45ff]/20">
+                  {/* EXIF & Metadata Forensics Inspector */}
+                  {result.multimodal_risk?.metadata && (
+                    <div className="p-3 bg-white/5 rounded-xl border border-white/10 text-xs space-y-2">
+                      <div className="flex items-center justify-between font-semibold text-white/80">
+                        <span>EXIF & Metadata Forensics</span>
+                        <span className="text-[10px] text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
+                          {result.multimodal_risk.metadata.format || 'Standard Media'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] text-white/60">
+                        <div>Resolution: <strong className="text-white">{result.multimodal_risk.metadata.dimensions || 'N/A'}</strong></div>
+                        <div>Camera: <strong className="text-white">{result.multimodal_risk.metadata.camera_model || result.multimodal_risk.metadata.camera_make || 'Stripped'}</strong></div>
+                        <div>Software: <strong className="text-white">{result.multimodal_risk.metadata.software || result.multimodal_risk.metadata.creator || 'None'}</strong></div>
+                        <div>GPS Data: <strong className="text-white">{result.multimodal_risk.metadata.has_gps ? 'Present' : 'None'}</strong></div>
+                      </div>
+
+                      {result.multimodal_risk.metadata_flags && result.multimodal_risk.metadata_flags.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-white/5 space-y-1">
+                          {result.multimodal_risk.metadata_flags.map((flag: string, fIdx: number) => (
+                            <div key={fIdx} className="text-[10px] text-amber-300/90 flex items-start gap-1.5">
+                              <span>⚠️</span> <span>{flag}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Executive Summary */}
+                  <div className="text-xs text-white/80 leading-relaxed p-3 bg-[#190d2e] rounded-lg border border-[#8c45ff]/20">
                     <span className="text-[#8c45ff] font-semibold">Executive Summary: </span>
                     {result.reason}
                   </div>
@@ -460,7 +636,7 @@ const AppInterface = () => {
                 Drop multiple claim files (Images, PDFs, Videos) here
               </p>
               <p className="text-white/50 text-xs mb-4">
-                Sequential zero-OOM processing preserves server memory and protects against 512MB RAM exhaustion.
+                Sequential zero-OOM processing with automated multimodal risk scoring.
               </p>
 
               <input
@@ -576,7 +752,7 @@ const AppInterface = () => {
                 <div className="p-5 border-b border-white/10 flex items-center justify-between">
                   <div>
                     <h3 className="text-base font-semibold text-white">Batch Evidence Analysis Results</h3>
-                    <p className="text-xs text-white/50">Click on any evidence item to view detailed agent forensics</p>
+                    <p className="text-xs text-white/50">Click on any evidence item to view detailed agent forensics, severity tier, and policy actions</p>
                   </div>
                   <button
                     onClick={handleDownloadBatchCSV}
@@ -592,6 +768,7 @@ const AppInterface = () => {
                     const isFake = item.result?.classification === 'Fake';
                     const isReal = item.result?.classification === 'Real';
                     const isExpanded = expandedItem === index;
+                    const tierInfo = formatSeverityTier(item.result?.multimodal_risk?.severity_tier);
 
                     return (
                       <div key={index} className="transition-colors hover:bg-white/[0.02]">
@@ -611,9 +788,14 @@ const AppInterface = () => {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-3">
                             {isCompleted ? (
-                              <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2.5">
+                                {item.result?.multimodal_risk?.severity_tier && (
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border hidden sm:inline-block ${tierInfo.color}`}>
+                                    {tierInfo.label}
+                                  </span>
+                                )}
                                 <span
                                   className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
                                     isFake
@@ -625,7 +807,7 @@ const AppInterface = () => {
                                 >
                                   {item.result?.classification || 'Unknown'}
                                 </span>
-                                <span className="text-xs font-mono text-white/60 hidden sm:inline-block">
+                                <span className="text-xs font-mono text-white/60 hidden md:inline-block">
                                   {item.result?.confidence ? `${(item.result.confidence * 100).toFixed(0)}%` : '--'}
                                 </span>
                               </div>
@@ -656,17 +838,31 @@ const AppInterface = () => {
                                     {item.result.votes?.map((v: any, vIdx: number) => (
                                       <div key={vIdx} className="flex justify-between items-center p-2 rounded bg-white/5">
                                         <span className="text-white/70">{v.model}</span>
-                                        <span className={v.vote === 'Fake' ? 'text-red-400' : 'text-green-400'}>
+                                        <span className={v.vote === 'Fake' ? 'text-red-400 font-semibold' : 'text-green-400 font-semibold'}>
                                           {v.vote} ({(v.conf * 100).toFixed(0)}%)
                                         </span>
                                       </div>
                                     ))}
                                   </div>
                                 </div>
-                                <div>
-                                  <div className="font-semibold text-white/80 mb-2">Forensic Findings</div>
-                                  <div className="p-3 bg-purple-950/20 border border-purple-500/20 rounded-lg text-white/70 leading-relaxed">
-                                    {item.result.reason || 'No detailed forensic note provided.'}
+                                <div className="space-y-3">
+                                  <div>
+                                    <div className="font-semibold text-white/80 mb-1">Recommended Policy Action</div>
+                                    <div className="p-2.5 bg-purple-950/20 border border-purple-500/20 rounded-lg text-white font-medium flex items-center justify-between">
+                                      <span>{formatPolicyAction(item.result.multimodal_risk?.recommended_action)}</span>
+                                      {item.result.multimodal_risk?.risk_score && (
+                                        <span className="text-[10px] text-white/50 font-mono">
+                                          Risk: {(item.result.multimodal_risk.risk_score * 100).toFixed(1)}%
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div>
+                                    <div className="font-semibold text-white/80 mb-1">Forensic Findings</div>
+                                    <div className="p-2.5 bg-white/5 border border-white/10 rounded-lg text-white/70 leading-relaxed">
+                                      {item.result.reason || 'No detailed forensic note provided.'}
+                                    </div>
                                   </div>
                                 </div>
                               </div>
