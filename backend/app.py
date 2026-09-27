@@ -78,7 +78,7 @@ except ImportError:
 
 risk_scorer_engine = MultimodalRiskScorer()
 single_model_risk_scorer = MultimodalRiskScorer(
-    text_weight=0.0, visual_weight=0.8, metadata_weight=0.2
+    text_weight=0.0, visual_weight=1.0, metadata_weight=0.0
 )
 
 app = FastAPI(
@@ -201,7 +201,8 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     if classification.lower() not in {"real", "fake"}:
         raise RuntimeError("Analysis did not return a valid Real or Fake verdict.")
 
-    # 4. Compute a provisional heuristic score, never an automatic decision
+    # 4. Compute a provisional visual score, never an automatic decision.
+    # Unverified metadata observations have no evidence-backed weight.
     if classification.lower() == "fake":
         visual_score = confidence_score
     elif classification.lower() == "real":
@@ -239,7 +240,7 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
         "vote_breakdown": vote_breakdown,
         "consensus": raw_result.get("consensus", "majority"),
         "calibration": raw_result.get("calibration", ""),
-        "risk_calibration": "Heuristic screening score; not a calibrated fraud probability.",
+        "risk_calibration": "Visual-only screening score; not a calibrated fraud probability. Metadata is context only.",
         "model_usage": raw_result.get("model_usage", {}),
         "needs_review": raw_result.get("needs_review", single_visual_model),
         "elapsed_seconds": elapsed,

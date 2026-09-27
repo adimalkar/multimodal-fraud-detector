@@ -38,7 +38,7 @@ flowchart TD
     subgraph API["AI Engine & API (FastAPI)"]
         GW["Rate Limiter & Guardrails\n(Sliding Window, File Size, Mime Check)"]
         Router["Job Queues & State Machine\n(POST /api/analyze, POST /api/batch/analyze)"]
-        Meta["Forensic Metadata Extractor\n(EXIF, GPS, Software, Provenance)"]
+        Meta["Metadata Context\n(EXIF, Software, File Properties)"]
         Vision["OpenRouter Vision Model\n(One bounded request per item)"]
         Scorer["Provisional Risk Heuristic\n(Human review required)"]
     end
@@ -71,15 +71,16 @@ flowchart TD
 - **Cost protection**: Configure a hard key spending limit and model allowlist in OpenRouter before public use. The application's in-memory IP limiter is not a billing cap.
 
 ### 2. Multimodal Risk Scoring Engine
-The existing response includes a provisional 0–1 risk heuristic. For the single-model path it weights the vision result at 80% and metadata flags at 20%; there is no independent text score or cross-modal synergy. These weights and model confidence are not calibrated against a labeled evaluation set. `recommended_action` is always `MANUAL_REVIEW`; the application must not use this score to approve or deny claims automatically.
+The existing response includes a provisional 0–1 visual screening score. Metadata observations are shown as context but contribute **zero** to this score: missing EXIF, square dimensions, editing software, changed timestamps, or low frame rate do not establish AI generation or fraud. There is no independent text score or cross-modal synergy. Model confidence is not calibrated against a labeled evaluation set. `recommended_action` is always `MANUAL_REVIEW`; the application must not use this score to approve or deny claims automatically.
 
 See [the model evaluation plan](docs/MODEL_EVALUATION_PLAN.md) for the labeled benchmark and cost gates needed before choosing a stronger model or adding a second paid call.
+See [the detector architecture review](docs/DETECTOR_ARCHITECTURE_REVIEW.md) for product and open-source comparisons, the original critic-jury audit, and modality-specific next steps.
 
-### 3. Forensic Metadata Extraction
-- **EXIF Analysis**: Extracts camera make, model, lens profile, focal length, exposure time, and ISO.
-- **Generative Software Detection**: Flags signatures from Photoshop, Stable Diffusion, Midjourney, Canvas, or GIMP.
-- **GPS Coordinates**: Identifies geographic metadata to cross-reference incident locations.
-- **PDF Forensics**: Analyzes Producer and Creator tags, modification dates, and digital signature tampering.
+### 3. Metadata Context
+- **Images**: Records available EXIF camera, software, timestamp, dimensions, and GPS fields. Absence or editable tags are not proof of manipulation.
+- **PDFs**: Reads a limited sample of Creator, Producer, and date tags; it does not validate PDF signatures or document contents.
+- **Video**: Records dimensions, frame rate, and duration. Low frame rate alone does not imply AI generation.
+- **Scoring**: These unverified observations contribute zero to the current single-model screening score.
 
 ### 4. Sequential Zero-OOM Batch Pipeline
 Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes with Exit 137 OOM errors. FraudSight AI prevents this via:

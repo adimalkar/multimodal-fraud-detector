@@ -439,7 +439,7 @@ const AppInterface = () => {
                   {result.multimodal_risk?.breakdown && (
                     <div>
                       <div className="flex justify-between text-xs text-white/60 mb-1.5 font-medium">
-                        <span>Multimodal Heuristic Weights</span>
+                        <span>Screening Signal Breakdown</span>
                         <span>Heuristic Signals</span>
                       </div>
                       <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
@@ -448,11 +448,11 @@ const AppInterface = () => {
                           <span className="font-bold text-blue-300">{(result.multimodal_risk.breakdown.visual_contribution * 100).toFixed(1)}%</span>
                         </div>
                         <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-                          <span className="text-white/40 block">Text Signal</span>
+                          <span className="text-white/40 block">Independent Text</span>
                           <span className="font-bold text-purple-300">{(result.multimodal_risk.breakdown.text_contribution * 100).toFixed(1)}%</span>
                         </div>
                         <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-                          <span className="text-white/40 block">Metadata Flags</span>
+                          <span className="text-white/40 block">Metadata Observations</span>
                           <span className="font-bold text-amber-300">{(result.multimodal_risk.breakdown.metadata_contribution * 100).toFixed(1)}%</span>
                         </div>
                       </div>
@@ -494,14 +494,14 @@ const AppInterface = () => {
                   {result.multimodal_risk?.metadata && (
                     <div className="p-3 bg-white/5 rounded-xl border border-white/10 text-xs space-y-2">
                       <div className="flex items-center justify-between font-semibold text-white/80">
-                        <span>EXIF & Metadata Forensics</span>
+                        <span>Metadata Context</span>
                         <span className="text-[10px] text-purple-300 bg-purple-500/20 px-2 py-0.5 rounded border border-purple-500/30">
                           {result.multimodal_risk.metadata.format || 'Standard Media'}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-[11px] text-white/60">
                         <div>Resolution: <strong className="text-white">{result.multimodal_risk.metadata.dimensions || 'N/A'}</strong></div>
-                        <div>Camera: <strong className="text-white">{result.multimodal_risk.metadata.camera_model || result.multimodal_risk.metadata.camera_make || 'Stripped'}</strong></div>
+                        <div>Camera: <strong className="text-white">{result.multimodal_risk.metadata.camera_model || result.multimodal_risk.metadata.camera_make || 'Not reported'}</strong></div>
                         <div>Software: <strong className="text-white">{result.multimodal_risk.metadata.software || result.multimodal_risk.metadata.creator || 'None'}</strong></div>
                         <div>GPS Data: <strong className="text-white">{result.multimodal_risk.metadata.has_gps ? 'Present' : 'None'}</strong></div>
                       </div>
@@ -510,7 +510,7 @@ const AppInterface = () => {
                         <div className="mt-2 pt-2 border-t border-white/5 space-y-1">
                           {result.multimodal_risk.metadata_flags.map((flag: string, fIdx: number) => (
                             <div key={fIdx} className="text-[10px] text-amber-300/90 flex items-start gap-1.5">
-                              <span>⚠️</span> <span>{flag}</span>
+                              <span>•</span> <span>{flag}</span>
                             </div>
                           ))}
                         </div>

@@ -313,3 +313,31 @@ def test_single_model_result_never_recommends_automatic_policy_action(client, mo
     assert output["multimodal_risk"]["cross_modal_synergy_applied"] is False
     assert output["multimodal_risk"]["breakdown"]["text_contribution"] == 0
     assert output["needs_review"] is True
+
+
+def test_unverified_metadata_does_not_raise_single_model_risk(monkeypatch):
+    model_result = {
+        "classification": "Real",
+        "confidence_score": 0.9,
+        "reason": "Controlled response",
+        "vision_findings": "No visible issue",
+        "consensus": "single_model",
+    }
+    monkeypatch.setattr(app_module, "analyze_media", lambda *args, **kwargs: model_result)
+
+    monkeypatch.setattr(
+        app_module,
+        "extract_metadata",
+        lambda *args: {"metadata": {}, "flags": [], "flags_count": 0},
+    )
+    plain = app_module.execute_agent_analysis("unused.jpg", "Image", "image/jpeg")
+    monkeypatch.setattr(
+        app_module,
+        "extract_metadata",
+        lambda *args: {"metadata": {"software": "Canva"}, "flags": ["exported", "square", "no EXIF"], "flags_count": 3},
+    )
+    with_observations = app_module.execute_agent_analysis("unused.jpg", "Image", "image/jpeg")
+
+    assert with_observations["multimodal_risk"]["risk_score"] == plain["multimodal_risk"]["risk_score"]
+    assert with_observations["multimodal_risk"]["breakdown"]["metadata_contribution"] == 0
+    assert with_observations["multimodal_risk"]["metadata_flags_count"] == 3
