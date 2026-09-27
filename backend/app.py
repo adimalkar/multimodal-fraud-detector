@@ -37,6 +37,11 @@ except ImportError:
     from qwen_agent import analyze_media, analyze_video, missing_model_credentials
 
 try:
+    from backend.provider_readiness import verify_provider_authentication
+except ImportError:
+    from provider_readiness import verify_provider_authentication
+
+try:
     from backend.storage import (
         generate_presigned_upload_url,
         is_storage_configured,
@@ -106,6 +111,16 @@ def ensure_analysis_available():
                 "code": "MODEL_PROVIDERS_UNCONFIGURED",
                 "message": "Analysis is unavailable until model provider credentials are configured.",
                 "missing_credentials": missing,
+            },
+        )
+    providers = verify_provider_authentication()
+    if any(provider["status"] != "authenticated" for provider in providers.values()):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MODEL_PROVIDERS_UNAVAILABLE",
+                "message": "Analysis is unavailable because model providers could not be authenticated.",
+                "providers": providers,
             },
         )
 
@@ -443,7 +458,7 @@ def health_check():
     return {
         "status": "healthy",
         "service": "FraudSight AI API",
-        "analysis_ready": not missing_model_credentials(),
+        "providers_configured": not missing_model_credentials(),
         "storage_configured": is_storage_configured(),
         "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]]),
         "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]])
@@ -452,7 +467,7 @@ def health_check():
 
 @app.get("/api/ready")
 def readiness_check():
-    """Report whether the configured model pipeline can accept analysis work."""
+    """Check provider authentication before accepting analysis work."""
     ensure_analysis_available()
     return {"status": "ready", "analysis_ready": True}
 

@@ -48,6 +48,14 @@ def check_backend(base_url, allow_unconfigured=False):
             return
         raise ValueError("Backend is running, but model providers are unconfigured")
 
+    if ready_status == 503 and detail.get("code") == "MODEL_PROVIDERS_UNAVAILABLE":
+        providers = detail.get("providers", {})
+        statuses = ", ".join(
+            f"{name}: {info.get('status')} (HTTP {info.get('http_status')})"
+            for name, info in sorted(providers.items())
+        )
+        raise ValueError(f"Backend is running, but provider authentication failed: {statuses}")
+
     raise ValueError(f"/api/ready returned an unexpected response: HTTP {ready_status}")
 
 

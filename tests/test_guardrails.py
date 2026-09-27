@@ -10,6 +10,13 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def reset_limiter(monkeypatch):
     monkeypatch.setattr("backend.app.missing_model_credentials", lambda: [])
+    monkeypatch.setattr(
+        "backend.app.verify_provider_authentication",
+        lambda: {
+            "openrouter": {"status": "authenticated", "http_status": 200},
+            "featherless": {"status": "authenticated", "http_status": 200},
+        },
+    )
     rate_limiter.reset()
     yield
     rate_limiter.reset()

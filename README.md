@@ -122,7 +122,7 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/` | Service status, active version, guardrail configs | `200 OK` |
 | `GET` | `/api/health` | Health check & queue worker status (used for keepalives) | `200 OK` |
-| `GET` | `/api/ready` | Confirms model credentials are configured for analysis | `200 OK` / `503` |
+| `GET` | `/api/ready` | Confirms required model keys are present and accepted by both providers | `200 OK` / `503` |
 | `POST` | `/api/analyze` | Submit single media file for asynchronous analysis | `200 OK` (returns `job_id`) |
 | `GET` | `/api/jobs/{job_id}` | Poll single job progress, stage, jury votes, and risk score | `200 OK` / `404` |
 | `POST` | `/api/batch/analyze` | Submit multiple files for sequential zero-OOM evaluation | `200 OK` (returns `batch_id`) |
@@ -135,7 +135,7 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | `GET` | `/api/analytics/export-csv` | Stream full evaluation history as CSV report | `200 OK` |
 | `POST` | `/analyze_media` | Synchronous evaluation endpoint for legacy compatibility | `200 OK` |
 
-Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before creating a job when required model credentials are absent. A batch whose every item fails has status `failed`; partial batches retain successful results and report failed items individually. Readiness checks configuration only and do not call external model providers.
+Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before creating a job when required model credentials are absent, or `503 MODEL_PROVIDERS_UNAVAILABLE` when a provider rejects or cannot verify its key. A batch whose every item fails has status `failed`; partial batches retain successful results and report failed items individually. `/api/health` reports liveness and whether keys are configured; `/api/ready` checks provider authentication through non-billable account endpoints and caches the outcome for one minute. It does not guarantee model availability or accuracy.
 
 ---
 

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend import app as app_module
-from backend import db_service, qwen_agent
+from backend import db_service, provider_readiness, qwen_agent
 
 
 @pytest.fixture
@@ -19,6 +19,14 @@ def client(monkeypatch, tmp_path):
     app_module.jobs.clear()
     app_module.batches.clear()
     app_module.rate_limiter.reset()
+    monkeypatch.setattr(
+        app_module,
+        "verify_provider_authentication",
+        lambda: {
+            "openrouter": {"status": "authenticated", "http_status": 200},
+            "featherless": {"status": "authenticated", "http_status": 200},
+        },
+    )
     with TestClient(app_module.app) as test_client:
         yield test_client
     app_module.jobs.clear()
@@ -42,7 +50,7 @@ def test_unconfigured_providers_reject_analysis_before_creating_jobs(client, mon
 
     health = client.get("/api/health")
     assert health.status_code == 200
-    assert health.json()["analysis_ready"] is False
+    assert health.json()["providers_configured"] is False
 
     readiness = client.get("/api/ready")
     assert readiness.status_code == 503
@@ -68,8 +76,60 @@ def test_unconfigured_providers_reject_analysis_before_creating_jobs(client, mon
 
 def test_configured_provider_readiness(client, monkeypatch):
     monkeypatch.setattr(app_module, "missing_model_credentials", lambda: [])
-    assert client.get("/api/health").json()["analysis_ready"] is True
+    assert client.get("/api/health").json()["providers_configured"] is True
     assert client.get("/api/ready").json() == {"status": "ready", "analysis_ready": True}
+
+
+def test_rejected_provider_blocks_jobs_without_exposing_keys(client, monkeypatch):
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: [])
+    monkeypatch.setattr(
+        app_module,
+        "verify_provider_authentication",
+        lambda: {
+            "openrouter": {"status": "rejected", "http_status": 401},
+            "featherless": {"status": "authenticated", "http_status": 200},
+        },
+    )
+
+    readiness = client.get("/api/ready")
+    assert readiness.status_code == 503
+    assert readiness.json()["detail"]["code"] == "MODEL_PROVIDERS_UNAVAILABLE"
+    assert readiness.json()["detail"]["providers"]["openrouter"]["http_status"] == 401
+
+    submission = client.post(
+        "/api/analyze", files={"file": ("claim.jpg", image_bytes(), "image/jpeg")}
+    )
+    assert submission.status_code == 503
+    assert app_module.jobs == {}
+
+
+def test_provider_authentication_uses_account_endpoints_and_caches_status(monkeypatch):
+    monkeypatch.setattr(
+        provider_readiness,
+        "AUTH_CHECKS",
+        {
+            "openrouter": ("https://openrouter.ai/api/v1/key", "test-openrouter-secret"),
+            "featherless": ("https://api.featherless.ai/v1/plan", "test-featherless-secret"),
+        },
+    )
+    provider_readiness._cache.update(expires_at=0.0, result=None)
+    calls = []
+
+    def fake_get(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        status_code = 401 if "openrouter" in url else 200
+        return type("Response", (), {"status_code": status_code})()
+
+    monkeypatch.setattr(provider_readiness.requests, "get", fake_get)
+    result = provider_readiness.verify_provider_authentication()
+    assert result["openrouter"] == {"status": "rejected", "http_status": 401}
+    assert result["featherless"] == {"status": "authenticated", "http_status": 200}
+    assert "test-openrouter-secret" not in str(result)
+    assert "test-featherless-secret" not in str(result)
+    assert len(calls) == 2
+    assert provider_readiness.verify_provider_authentication() == result
+    assert len(calls) == 2
+    provider_readiness._cache.update(expires_at=0.0, result=None)
 
 
 def test_completed_image_job_persists_result(client, monkeypatch):

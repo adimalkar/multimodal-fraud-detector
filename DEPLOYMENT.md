@@ -126,6 +126,8 @@ The repo includes `render.yaml` for a Python FastAPI web service:
 4. Run `python scripts/check_backend.py https://YOUR-BACKEND-URL` from a checkout after deployment. This checks JSON health and readiness responses and the OpenAPI route list; an unrelated app returning HTTP 200 will fail the check.
 5. Run `python scripts/check_media_pipeline.py --preprocess-only` to check local image, PDF, and video preprocessing. With a ready backend and provider keys, run `python scripts/check_media_pipeline.py https://YOUR-BACKEND-URL` to submit synthetic evidence in all three formats and poll each job. This checks execution and result shape, not fraud detection accuracy. The full run makes paid provider calls and stores three synthetic evaluations.
 
+`/api/ready` verifies both configured provider keys against their account endpoints without making billable model calls. A `503 MODEL_PROVIDERS_UNAVAILABLE` response identifies providers whose keys were rejected or could not be checked. Recheck the corresponding Render secret and redeploy; do not copy the key into logs or issue reports.
+
 The `Verify deployed backend` GitHub Actions workflow checks the configured Render URL daily and can be run manually with a different backend URL. It fails when the URL serves Streamlit HTML or the API is unconfigured. GitHub Actions secrets are not needed for this read-only deployment check. The manual `run_media_pipeline` option runs the synthetic three-format check against a ready backend and uses provider credits.
 
 ---
