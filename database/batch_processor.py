@@ -25,7 +25,7 @@ def process_batch():
         return
 
     print(f"🔍 Found {len(unprocessed_records)} unprocessed records. Beginning Batch Inference...\n")
-    print(f"Using pipeline: Qwen-VL-Plus (Vision) -> Voting(Qwen, DeepSeek V3.2, GLM 4.6)\n")
+    print("Using one bounded OpenRouter vision request per item; results need human review.\n")
     
     processed_count = 0
     
@@ -58,9 +58,9 @@ def process_batch():
             vision_findings = result.get("vision_findings", "")
             final_reasoning = result.get("reason", "")
             
-            # Convert voting breakdown to JSON string for storage if needed, though we just store final reasoning
+            # Retain model attribution in the existing reasoning field.
             if "vote_breakdown" in result:
-                final_reasoning += f"\n\nVotes: {json.dumps(result['vote_breakdown'])}"
+                final_reasoning += f"\n\nModel: {json.dumps(result['vote_breakdown'])}"
                 
         except Exception as e:
             print(f"❌ Error processing {filename}: {e}")
@@ -93,7 +93,7 @@ def process_batch():
         print(f"   -> AI Says: {ai_prediction} ({confidence*100:.1f}%) | Time: {processing_time}s | {match_str}\n")
         processed_count += 1
         
-        # Add a small delay so we don't accidentally get rate-limited by OpenRouter/Featherless
+        # Add a small delay so we don't accidentally get rate-limited by OpenRouter
         time.sleep(1.5)
 
     conn.close()

@@ -49,7 +49,7 @@ const AppInterface = () => {
   const formatSeverityTier = (tier?: string) => {
     switch (tier) {
       case 'CRITICAL_FRAUD':
-        return { label: 'CRITICAL FRAUD', color: 'bg-red-500/20 text-red-300 border-red-500/40 animate-pulse', icon: '🚨' };
+        return { label: 'HIGH SCREENING SCORE', color: 'bg-red-500/20 text-red-300 border-red-500/40', icon: '🚨' };
       case 'HIGH_RISK':
         return { label: 'HIGH RISK', color: 'bg-amber-500/20 text-amber-300 border-amber-500/40', icon: '⚠️' };
       case 'SUSPICIOUS':
@@ -91,7 +91,7 @@ const AppInterface = () => {
     setAnalyzing(true);
     setError(null);
     setResult(null);
-    setStage('Submitting evidence to multi-agent queue...');
+    setStage('Submitting evidence for visual screening...');
 
     try {
       const formData = new FormData();
@@ -134,49 +134,8 @@ const AppInterface = () => {
         }
       }, 2000);
     } catch (err: any) {
-      console.warn('API unavailable or in cold start, running simulated demo inspection:', err);
-      setStage('Qwen-VL & Critic jury inspecting evidence...');
-      setTimeout(() => {
-        setAnalyzing(false);
-        setResult({
-          classification: 'Fake',
-          confidence: 0.98,
-          confidence_score: 0.98,
-          reason: 'Microscopic artifacts in reflection patterns and impossible geometry detected across critic consensus.',
-          votes: [
-            { model: 'Qwen-VL-Plus (Vision)', vote: 'Fake', conf: 0.95 },
-            { model: 'Qwen Turbo', vote: 'Fake', conf: 0.99 },
-            { model: 'DeepSeek R1', vote: 'Fake', conf: 0.98 },
-            { model: 'GLM 4.6', vote: 'Real', conf: 0.60 },
-          ],
-          multimodal_risk: {
-            risk_score: 0.945,
-            severity_tier: 'CRITICAL_FRAUD',
-            recommended_action: 'BLOCK_TRANSACTION_AND_ALERT_SECURITY',
-            cross_modal_synergy_applied: true,
-            breakdown: {
-              visual_contribution: 0.38,
-              text_contribution: 0.38,
-              metadata_contribution: 0.185,
-            },
-            metadata: {
-              format: 'JPEG',
-              dimensions: '1024x1024',
-              software: 'Adobe Photoshop 2024 (Macintosh)',
-              camera_make: 'Apple',
-              camera_model: 'iPhone 15 Pro',
-              created_at: '2026:09:20 14:10:05',
-              has_gps: false,
-            },
-            metadata_flags: [
-              'Post-processing or AI editing signature detected in metadata: Adobe Photoshop 2024',
-              'Image has exact square dimension (1024x1024) characteristic of AI generators',
-              'Original capture timestamp differs from modification timestamp',
-            ],
-            metadata_flags_count: 3,
-          }
-        });
-      }, 3500);
+      setError(err instanceof Error ? err.message : 'Visual screening is unavailable.');
+      setAnalyzing(false);
     }
   };
 
@@ -262,60 +221,8 @@ const AppInterface = () => {
         }
       }, 2000);
     } catch (err: any) {
-      console.warn('API unavailable or in cold start, running simulated demo batch inspection:', err);
-      const mockItems: BatchItem[] = batchFiles.map((f, i) => ({
-        item_id: i,
-        filename: f.name,
-        media_type: f.name.endsWith('.pdf') ? 'Document' : f.name.match(/\.(mp4|avi|mov)$/i) ? 'Video' : 'Image',
-        status: 'completed',
-        result: {
-          classification: i % 2 === 0 ? 'Fake' : 'Real',
-          confidence: i % 2 === 0 ? 0.96 : 0.88,
-          confidence_score: i % 2 === 0 ? 0.96 : 0.88,
-          reason: i % 2 === 0
-            ? 'Specular reflection discrepancy and unnatural frequency grid detected.'
-            : 'Authentic lighting falloff, coherent EXIF metadata, and sensor noise signature verified.',
-          votes: [
-            { model: 'Qwen-VL-Plus', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.94 },
-            { model: 'Qwen Turbo', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.92 },
-            { model: 'DeepSeek R1', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.98 },
-            { model: 'GLM 4.6', vote: i % 2 === 0 ? 'Fake' : 'Real', conf: 0.85 },
-          ],
-          multimodal_risk: {
-            risk_score: i % 2 === 0 ? 0.94 : 0.12,
-            severity_tier: i % 2 === 0 ? 'CRITICAL_FRAUD' : 'LOW_RISK',
-            recommended_action: i % 2 === 0 ? 'BLOCK_TRANSACTION_AND_ALERT_SECURITY' : 'APPROVE_AUTOMATICALLY',
-            cross_modal_synergy_applied: i % 2 === 0,
-            breakdown: {
-              visual_contribution: i % 2 === 0 ? 0.38 : 0.05,
-              text_contribution: i % 2 === 0 ? 0.38 : 0.05,
-              metadata_contribution: i % 2 === 0 ? 0.18 : 0.02,
-            },
-            metadata: {
-              format: f.name.endsWith('.pdf') ? 'PDF' : 'JPEG',
-              software: i % 2 === 0 ? 'Canva' : 'Apple Camera Sensor',
-              dimensions: '1920x1080',
-            },
-            metadata_flags: i % 2 === 0 ? ['Editing signature detected in metadata: Canva'] : [],
-            metadata_flags_count: i % 2 === 0 ? 1 : 0,
-          }
-        }
-      }));
-
-      setTimeout(() => {
-        setBatchItems(mockItems);
-        setBatchSummary({
-          total: batchFiles.length,
-          processed: batchFiles.length,
-          fake_count: mockItems.filter(m => m.result?.classification === 'Fake').length,
-          real_count: mockItems.filter(m => m.result?.classification === 'Real').length,
-          error_count: 0,
-          avg_confidence: 0.92
-        });
-        setBatchProgress(100);
-        setBatchStage('Batch evaluation complete.');
-        setBatchAnalyzing(false);
-      }, 3000);
+      setBatchError(err instanceof Error ? err.message : 'Batch screening is unavailable.');
+      setBatchAnalyzing(false);
     }
   };
 
@@ -442,7 +349,7 @@ const AppInterface = () => {
                   <svg className="w-12 h-12 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
-                  <p>Upload a file to see the multi-agent forensics report here.</p>
+                  <p>Upload a file to see a visual screening report here.</p>
                 </div>
               )}
 
@@ -452,26 +359,26 @@ const AppInterface = () => {
                     <div className="text-xs uppercase tracking-wider text-purple-400 font-semibold mb-1">Live Pipeline Status</div>
                     <div className="text-sm font-medium text-white flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full bg-[#8c45ff] animate-ping inline-block" />
-                      {stage || 'Dispatching evidence to multi-agent jury...'}
+                      {stage || 'Preparing evidence for screening...'}
                     </div>
                   </div>
 
                   <div className="flex flex-col gap-3.5">
                     <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-3 text-xs text-white/70">
                       <div className="h-2 w-2 rounded-full bg-blue-400 animate-pulse" />
-                      <span><b>Vision:</b> Qwen-VL-Plus extracting microscopic anomalies</span>
+                      <span><b>Input:</b> Preparing bounded visual evidence</span>
                     </motion.div>
                     <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.8 }} className="flex items-center gap-3 text-xs text-white/70">
                       <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                      <span><b>Critic 1 & 2:</b> DeepSeek R1 & Qwen Turbo checking consistency</span>
+                      <span><b>Model:</b> Screening visible details in one request</span>
                     </motion.div>
                     <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 1.6 }} className="flex items-center gap-3 text-xs text-white/70">
                       <div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
-                      <span><b>Critic 3 & Jury:</b> GLM 4.6 computing consensus & confidence</span>
+                      <span><b>Metadata:</b> Recording available file signals</span>
                     </motion.div>
                     <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 2.2 }} className="flex items-center gap-3 text-xs text-white/70">
                       <div className="h-2 w-2 rounded-full bg-purple-400 animate-pulse" />
-                      <span><b>Risk Engine:</b> Multimodal risk scorer computing unified severity tier</span>
+                      <span><b>Result:</b> Preparing provisional score for human review</span>
                     </motion.div>
                   </div>
                 </div>
@@ -483,7 +390,7 @@ const AppInterface = () => {
                   {/* Verdict & Severity Card */}
                   <div className={`p-4 rounded-xl border ${result.classification === 'Fake' ? 'bg-red-500/10 border-red-500/30' : 'bg-green-500/10 border-green-500/30'}`}>
                     <div className="flex items-center justify-between mb-1.5">
-                      <div className="text-xs font-bold tracking-widest uppercase text-white/50">Verdict & Risk Tier</div>
+                      <div className="text-xs font-bold tracking-widest uppercase text-white/50">Screening Label & Risk Tier</div>
                       {result.multimodal_risk?.severity_tier && (() => {
                         const tier = formatSeverityTier(result.multimodal_risk.severity_tier);
                         return (
@@ -499,7 +406,7 @@ const AppInterface = () => {
                       </div>
                       {result.multimodal_risk && (
                         <div className="text-right">
-                          <span className="text-[10px] text-white/50 block uppercase">Composite Risk</span>
+                          <span className="text-[10px] text-white/50 block uppercase">Heuristic Score</span>
                           <span className="text-xl font-mono font-bold text-white">
                             {(result.multimodal_risk.risk_score * 100).toFixed(1)}%
                           </span>
@@ -508,13 +415,15 @@ const AppInterface = () => {
                     </div>
                   </div>
 
+                  <p className="text-xs text-amber-200/80">This is an uncalibrated visual screening result. A person must review the original evidence before any claim decision.</p>
+
                   {/* Automated Policy Action Recommendation */}
                   {result.multimodal_risk?.recommended_action && (
                     <div className="p-3 rounded-xl bg-purple-950/30 border border-[#8c45ff]/30 flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2.5">
                         <span className="text-lg">🛡️</span>
                         <div>
-                          <span className="text-purple-400 block text-[10px] uppercase font-bold tracking-wider">Automated Policy Decision</span>
+                          <span className="text-purple-400 block text-[10px] uppercase font-bold tracking-wider">Review Recommendation</span>
                           <span className="text-white font-semibold">{formatPolicyAction(result.multimodal_risk.recommended_action)}</span>
                         </div>
                       </div>
@@ -531,7 +440,7 @@ const AppInterface = () => {
                     <div>
                       <div className="flex justify-between text-xs text-white/60 mb-1.5 font-medium">
                         <span>Multimodal Heuristic Weights</span>
-                        <span>Compounded Signal</span>
+                        <span>Heuristic Signals</span>
                       </div>
                       <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
                         <div className="p-2 rounded-lg bg-white/5 border border-white/10">
@@ -539,7 +448,7 @@ const AppInterface = () => {
                           <span className="font-bold text-blue-300">{(result.multimodal_risk.breakdown.visual_contribution * 100).toFixed(1)}%</span>
                         </div>
                         <div className="p-2 rounded-lg bg-white/5 border border-white/10">
-                          <span className="text-white/40 block">Forensic NLP</span>
+                          <span className="text-white/40 block">Text Signal</span>
                           <span className="font-bold text-purple-300">{(result.multimodal_risk.breakdown.text_contribution * 100).toFixed(1)}%</span>
                         </div>
                         <div className="p-2 rounded-lg bg-white/5 border border-white/10">
@@ -553,7 +462,7 @@ const AppInterface = () => {
                   {/* Confidence Score Bar */}
                   <div>
                     <div className="flex justify-between text-sm mb-1.5">
-                      <span className="text-white/70">Jury Consensus Confidence</span>
+                      <span className="text-white/70">Model Confidence (uncalibrated)</span>
                       <span className="font-bold text-white">{(result.confidence * 100).toFixed(1)}%</span>
                     </div>
                     <div className="h-2 bg-white/10 rounded-full overflow-hidden">
@@ -565,9 +474,9 @@ const AppInterface = () => {
                     </div>
                   </div>
 
-                  {/* Agent Jury Breakdown */}
+                  {/* Model Attribution */}
                   <div>
-                    <div className="text-sm font-semibold mb-2.5 text-white">Agent Jury Breakdown</div>
+                    <div className="text-sm font-semibold mb-2.5 text-white">Model Attribution</div>
                     <div className="space-y-1.5">
                       {result.votes?.map((v: any, i: number) => (
                         <div key={i} className="flex items-center justify-between bg-white/5 p-2 rounded-md text-xs">
@@ -833,7 +742,7 @@ const AppInterface = () => {
                             >
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
-                                  <div className="font-semibold text-white/80 mb-2">Agent Jury Votes</div>
+                                  <div className="font-semibold text-white/80 mb-2">Model Attribution</div>
                                   <div className="space-y-1.5">
                                     {item.result.votes?.map((v: any, vIdx: number) => (
                                       <div key={vIdx} className="flex justify-between items-center p-2 rounded bg-white/5">
@@ -847,7 +756,7 @@ const AppInterface = () => {
                                 </div>
                                 <div className="space-y-3">
                                   <div>
-                                    <div className="font-semibold text-white/80 mb-1">Recommended Policy Action</div>
+                                    <div className="font-semibold text-white/80 mb-1">Review Recommendation</div>
                                     <div className="p-2.5 bg-purple-950/20 border border-purple-500/20 rounded-lg text-white font-medium flex items-center justify-between">
                                       <span>{formatPolicyAction(item.result.multimodal_risk?.recommended_action)}</span>
                                       {item.result.multimodal_risk?.risk_score && (

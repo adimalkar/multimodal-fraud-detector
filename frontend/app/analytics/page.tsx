@@ -4,7 +4,7 @@ import AnalyticsDashboard from "@/components/AnalyticsDashboard";
 
 export const metadata = {
   title: "Analytics & Forensics Audit Log — FraudSight AI",
-  description: "Live forensic analytics, fraud detection rates, and multi-agent consensus audit records.",
+  description: "Visual screening history, provisional risk tiers, and review records.",
 };
 
 const AnalyticsPage = () => {

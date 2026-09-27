@@ -12,19 +12,19 @@ const steps = [
     {
         step: "02",
         title: "Vision Analysis",
-        description: "Qwen-VL-Plus extracts microscopic anomalies — impossible reflections, AI texture patterns, metadata inconsistencies.",
+        description: "A low-cost vision model reviews a bounded image, PDF page set, or sampled video frames for visible clues.",
         icon: "🔍",
     },
     {
         step: "03",
-        title: "Critic Cross-Examination",
-        description: "Three independent LLM critics (Qwen Turbo, DeepSeek R1, GLM 4.6) challenge and verify the vision findings.",
+        title: "Metadata Context",
+        description: "Available metadata is recorded as a separate heuristic signal alongside the visual screening result.",
         icon: "⚔️",
     },
     {
         step: "04",
-        title: "Consensus Verdict",
-        description: "Majority vote determines the final classification with a calibrated confidence score and executive summary.",
+        title: "Review Result",
+        description: "Inspect the model's observations and uncertainty. A person must decide what the evidence means.",
         icon: "✅",
     },
 ];
@@ -39,7 +39,7 @@ const HowItWorks = () => {
                         How It Works
                     </h2>
                     <p className="text-white/60 text-lg md:text-xl max-w-xl mx-auto tracking-tight mt-5">
-                        From upload to verdict in under 3 minutes.
+                        Four steps from upload to a provisional screening result.
                     </p>
                 </div>
 

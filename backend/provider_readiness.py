@@ -6,14 +6,13 @@ import time
 import requests
 
 try:
-    from backend.qwen_agent import FEATHERLESS_API_KEY, OPENROUTER_API_KEY
+    from backend.qwen_agent import OPENROUTER_API_KEY
 except ImportError:
-    from qwen_agent import FEATHERLESS_API_KEY, OPENROUTER_API_KEY
+    from qwen_agent import OPENROUTER_API_KEY
 
 
 AUTH_CHECKS = {
     "openrouter": ("https://openrouter.ai/api/v1/key", OPENROUTER_API_KEY),
-    "featherless": ("https://api.featherless.ai/v1/plan", FEATHERLESS_API_KEY),
 }
 AUTH_CACHE_SECONDS = 60
 _cache = {"expires_at": 0.0, "result": None}

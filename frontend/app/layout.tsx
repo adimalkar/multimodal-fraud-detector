@@ -6,8 +6,8 @@ import { twMerge } from "tailwind-merge";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-	title: "FraudSight AI — Multi-Agent Fraud Detection",
-	description: "Zero-trust multi-agent insurance fraud detection for images, documents, and video. Powered by Qwen-VL, DeepSeek R1, and GLM.",
+	title: "FraudSight AI — Visual Evidence Screening",
+	description: "Visual evidence screening for images, documents, and video. Every result requires human review.",
 };
 
 const RootLayout = ({

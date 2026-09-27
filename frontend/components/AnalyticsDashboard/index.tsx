@@ -42,88 +42,21 @@ interface AnalyticsData {
   }>;
 }
 
-const mockDefaultData: AnalyticsData = {
-  total_records: 48,
-  processed_records: 48,
-  fake_count: 19,
-  real_count: 29,
-  flagged_rate_percentage: 39.6,
-  avg_confidence: 0.942,
-  avg_processing_time_sec: 4.8,
-  database_engine: "PostgreSQL / SQLite",
-  media_counts: {
-    images: 32,
-    documents: 11,
-    videos: 5
-  },
-  severity_breakdown: {
-    critical_fraud: 12,
-    high_risk: 7,
-    suspicious: 14,
-    low_risk: 15
-  },
-  recent_evaluations: [
-    {
-      id: 1,
-      filename: "tampered_invoice_04.pdf",
-      media_type: "Document",
-      fraud_category: "Document Fraud",
-      ai_prediction: "Fake",
-      confidence: 0.98,
-      risk_score: 0.96,
-      severity_tier: "CRITICAL_FRAUD",
-      recommended_action: "BLOCK_TRANSACTION_AND_ALERT_SECURITY",
-      final_reasoning: "DeepSeek & Qwen critics identified spliced font metrics and metadata mismatch in header.",
-      processing_time: 3.2,
-      processed_at: "2026-09-22 21:15:30"
-    },
-    {
-      id: 2,
-      filename: "bumper_crash_rear.jpg",
-      media_type: "Image",
-      fraud_category: "Vehicle Claim",
-      ai_prediction: "Real",
-      confidence: 0.96,
-      risk_score: 0.08,
-      severity_tier: "LOW_RISK",
-      recommended_action: "APPROVE_AUTOMATICALLY",
-      final_reasoning: "Authentic ambient specular reflections and natural compression artifacts confirmed by jury.",
-      processing_time: 2.1,
-      processed_at: "2026-09-22 20:45:10"
-    },
-    {
-      id: 3,
-      filename: "dashcam_intersection.mp4",
-      media_type: "Video",
-      fraud_category: "Vehicle Claim",
-      ai_prediction: "Fake",
-      confidence: 0.93,
-      risk_score: 0.88,
-      severity_tier: "HIGH_RISK",
-      recommended_action: "ESCALATE_TO_SENIOR_ANALYST_QUEUE",
-      final_reasoning: "Frame-to-frame temporal inconsistency detected on passenger door reflection pattern.",
-      processing_time: 8.4,
-      processed_at: "2026-09-22 19:30:22"
-    },
-    {
-      id: 4,
-      filename: "roof_hail_damage.jpg",
-      media_type: "Image",
-      fraud_category: "Property Claim",
-      ai_prediction: "Real",
-      confidence: 0.89,
-      risk_score: 0.22,
-      severity_tier: "LOW_RISK",
-      recommended_action: "APPROVE_AUTOMATICALLY",
-      final_reasoning: "Consistent lighting angle across impact craters matching solar direction metadata.",
-      processing_time: 2.4,
-      processed_at: "2026-09-22 18:12:05"
-    }
-  ]
+const emptyData: AnalyticsData = {
+  total_records: 0,
+  processed_records: 0,
+  fake_count: 0,
+  real_count: 0,
+  flagged_rate_percentage: 0,
+  avg_confidence: 0,
+  avg_processing_time_sec: 0,
+  media_counts: { images: 0, documents: 0, videos: 0 },
+  severity_breakdown: { critical_fraud: 0, high_risk: 0, suspicious: 0, low_risk: 0 },
+  recent_evaluations: [],
 };
 
 const AnalyticsDashboard = () => {
-  const [data, setData] = useState<AnalyticsData>(mockDefaultData);
+  const [data, setData] = useState<AnalyticsData>(emptyData);
   const [loading, setLoading] = useState(false);
   const [isLive, setIsLive] = useState(false);
 
@@ -135,10 +68,8 @@ const AnalyticsDashboard = () => {
       const res = await fetch(`${apiUrl}/api/analytics/stats`);
       if (res.ok) {
         const json = await res.json();
-        if (json.total_records > 0 || json.recent_evaluations?.length > 0) {
-          setData(json);
-          setIsLive(true);
-        }
+        setData(json);
+        setIsLive(true);
       }
     } catch (e) {
       console.warn("Backend analytics offline, showing cached metrics:", e);
@@ -158,7 +89,7 @@ const AnalyticsDashboard = () => {
   const getTierBadge = (tier?: string) => {
     switch (tier) {
       case 'CRITICAL_FRAUD':
-        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-red-500/20 text-red-400 border border-red-500/30">CRITICAL</span>;
+        return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-red-500/20 text-red-400 border border-red-500/30">HIGH SCORE</span>;
       case 'HIGH_RISK':
         return <span className="px-2 py-0.5 rounded-full font-bold text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30">HIGH RISK</span>;
       case 'SUSPICIOUS':
@@ -195,10 +126,10 @@ const AnalyticsDashboard = () => {
             <div className="flex items-center gap-3">
               <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-white">Forensics Analytics & Audit Log</h1>
               <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium border ${isLive ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-purple-500/20 text-purple-300 border-purple-500/30'}`}>
-                {isLive ? `● Live (${data.database_engine || 'Database'})` : 'Demo Dataset'}
+                {isLive ? `● Live (${data.database_engine || 'Database'})` : 'No live data'}
               </span>
             </div>
-            <p className="text-white/60 text-sm mt-1">Multi-agent consensus history, risk tier breakdown, and policy audit logs.</p>
+            <p className="text-white/60 text-sm mt-1">Screening history and provisional risk tiers. Results require human review.</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -236,19 +167,19 @@ const AnalyticsDashboard = () => {
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="p-5 rounded-2xl bg-red-500/10 border border-red-500/20 backdrop-blur-sm">
-            <span className="text-xs uppercase tracking-wider text-red-400 font-semibold">Fraud Flagged Rate</span>
+            <span className="text-xs uppercase tracking-wider text-red-400 font-semibold">Flagged Screening Rate</span>
             <div className="text-3xl font-bold text-red-400 mt-1">{data.flagged_rate_percentage}%</div>
-            <span className="text-xs text-red-300/60 mt-1 block">{data.fake_count} flagged as synthetic/forged</span>
+            <span className="text-xs text-red-300/60 mt-1 block">{data.fake_count} labeled for review</span>
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 backdrop-blur-sm">
-            <span className="text-xs uppercase tracking-wider text-emerald-400 font-semibold">Authentic Media</span>
+            <span className="text-xs uppercase tracking-wider text-emerald-400 font-semibold">Real Screening Label</span>
             <div className="text-3xl font-bold text-emerald-400 mt-1">{data.real_count}</div>
-            <span className="text-xs text-emerald-300/60 mt-1 block">Passed zero-trust critic check</span>
+            <span className="text-xs text-emerald-300/60 mt-1 block">Still requires human review</span>
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="p-5 rounded-2xl bg-purple-500/10 border border-purple-500/20 backdrop-blur-sm">
-            <span className="text-xs uppercase tracking-wider text-purple-400 font-semibold">Mean Jury Confidence</span>
+            <span className="text-xs uppercase tracking-wider text-purple-400 font-semibold">Mean Model Confidence</span>
             <div className="text-3xl font-bold text-purple-300 mt-1">{(data.avg_confidence * 100).toFixed(1)}%</div>
             <span className="text-xs text-purple-200/60 mt-1 block">Avg latency: {data.avg_processing_time_sec}s</span>
           </motion.div>
@@ -258,24 +189,24 @@ const AnalyticsDashboard = () => {
         {data.severity_breakdown && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
             <div className="p-4 rounded-xl bg-red-950/20 border border-red-500/20 text-center">
-              <div className="text-[11px] uppercase tracking-wider text-red-400 font-semibold">🚨 Critical Fraud</div>
+              <div className="text-[11px] uppercase tracking-wider text-red-400 font-semibold">High Screening Score</div>
               <div className="text-2xl font-bold text-red-300 mt-1">{data.severity_breakdown.critical_fraud}</div>
-              <span className="text-[10px] text-white/40">Immediate block policy</span>
+              <span className="text-[10px] text-white/40">Review required</span>
             </div>
             <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-500/20 text-center">
               <div className="text-[11px] uppercase tracking-wider text-amber-400 font-semibold">⚠️ High Risk</div>
               <div className="text-2xl font-bold text-amber-300 mt-1">{data.severity_breakdown.high_risk}</div>
-              <span className="text-[10px] text-white/40">Escalated to senior queue</span>
+              <span className="text-[10px] text-white/40">Review required</span>
             </div>
             <div className="p-4 rounded-xl bg-yellow-950/20 border border-yellow-500/20 text-center">
               <div className="text-[11px] uppercase tracking-wider text-yellow-400 font-semibold">🔍 Suspicious</div>
               <div className="text-2xl font-bold text-yellow-300 mt-1">{data.severity_breakdown.suspicious}</div>
-              <span className="text-[10px] text-white/40">Step-up verification required</span>
+              <span className="text-[10px] text-white/40">Review required</span>
             </div>
             <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/20 text-center">
               <div className="text-[11px] uppercase tracking-wider text-emerald-400 font-semibold">🛡️ Low Risk</div>
               <div className="text-2xl font-bold text-emerald-300 mt-1">{data.severity_breakdown.low_risk}</div>
-              <span className="text-[10px] text-white/40">Automated fast approval</span>
+              <span className="text-[10px] text-white/40">Review required</span>
             </div>
           </div>
         )}
@@ -318,7 +249,7 @@ const AnalyticsDashboard = () => {
                   <th className="py-3.5 px-4 font-semibold">Confidence</th>
                   <th className="py-3.5 px-4 font-semibold">Severity Tier</th>
                   <th className="py-3.5 px-4 font-semibold">Policy Action</th>
-                  <th className="py-3.5 px-4 font-semibold">Jury Forensic Findings</th>
+                  <th className="py-3.5 px-4 font-semibold">Model Findings</th>
                   <th className="py-3.5 px-4 font-semibold">Timestamp</th>
                 </tr>
               </thead>

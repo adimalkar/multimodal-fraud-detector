@@ -11,7 +11,6 @@ def client(monkeypatch):
         "backend.app.verify_provider_authentication",
         lambda: {
             "openrouter": {"status": "authenticated", "http_status": 200},
-            "featherless": {"status": "authenticated", "http_status": 200},
         },
     )
     return TestClient(app)

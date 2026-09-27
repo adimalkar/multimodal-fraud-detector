@@ -55,7 +55,7 @@ const Hero = () => {
             <div className="relative container mt-16">
                 <h1 className="text-8xl md:text-[168px] md:leading-none font-semibold tracking-tighter bg-white bg-[radial-gradient(100%_100%_at_top_left,white,rgb(74,32,138,.5))] text-transparent bg-clip-text text-center" style={{ letterSpacing: "-0.04em", fontSize: "110px" }}>FraudSight AI</h1>
                 <p className="text-lg md:text-xl text-white/70 mt-5 text-center max-w-xl mx-auto">
-                    Multi-Agent Insurance Fraud Detection. Zero-trust pipeline powered by Qwen and DeepSeek for Images, Documents, and Video.
+                    Visual evidence screening for images, documents, and video. Inspect the clues, then make a human decision.
                 </p>
                 <div className="flex justify-center mt-5">
                     <Link href="/analyze">

@@ -1,6 +1,6 @@
-# Production Infrastructure & Deployment Guide (100% Free Tier)
+# Infrastructure & Deployment Guide
 
-This guide documents the decoupled, production-grade architecture for **FraudSight AI**.
+This guide documents the current deployment path for **FraudSight AI**. Hosting may have free tiers; model requests through OpenRouter consume credits.
 
 ```
 [ User Browser ]
@@ -33,8 +33,8 @@ This guide documents the decoupled, production-grade architecture for **FraudSig
 │  Option B: Render / Koyeb (API-only)         │
 │    • Reserved 100% for Python (No Node.js)   │
 │  - In-memory rate limiting & file validation │
-│  - Multi-agent jury (Qwen-VL + LLM critics)  │
-│  - Multimodal risk scoring engine            │
+│  - One bounded OpenRouter vision request     │
+│  - Provisional risk heuristic; human review  │
 └──────────────┬───────────────────────────────┘
                │
                ▼
@@ -106,7 +106,6 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
    - **Space hardware**: Free (2 vCPU, 16 GB RAM)
 3. Set Space Secrets in **Settings → Variables and Secrets**:
    - `OPENROUTER_API_KEY`: your OpenRouter API key
-   - `FEATHERLESS_API_KEY`: your Featherless API key (required for the current analysis pipeline)
    - `DATABASE_URL`: your Supabase/Neon PostgreSQL URL (optional)
 4. Push or mirror this repository:
    ```bash
@@ -122,11 +121,13 @@ Hugging Face Spaces offers **16 GB RAM + 2 vCPU** for FREE on Docker spaces — 
 The repo includes `render.yaml` for a Python FastAPI web service:
 1. Connect your repository on [dashboard.render.com](https://dashboard.render.com).
 2. Sync the Blueprint, or configure an existing **Web Service** to use the Python runtime, `pip install -r requirements.txt && python database/init_db.py` build command, `uvicorn backend.app:app --host 0.0.0.0 --port $PORT` start command, and `/api/health` health check path. Verify the existing service's linked repository and branch in the Render dashboard; a repository YAML change alone does not update a manually configured service.
-3. Set both model provider keys (`OPENROUTER_API_KEY` and `FEATHERLESS_API_KEY`) as Render secrets, plus any optional database and storage settings. Never commit the key values.
+3. Set `OPENROUTER_API_KEY` as a Render secret, plus any optional database and storage settings. Never commit the key value. The optional `OPENROUTER_VISION_MODEL` must match the allowlist in `backend/qwen_agent.py`.
 4. Run `python scripts/check_backend.py https://YOUR-BACKEND-URL` from a checkout after deployment. This checks JSON health and readiness responses and the OpenAPI route list; an unrelated app returning HTTP 200 will fail the check.
 5. Run `python scripts/check_media_pipeline.py --preprocess-only` to check local image, PDF, and video preprocessing. With a ready backend and provider keys, run `python scripts/check_media_pipeline.py https://YOUR-BACKEND-URL` to submit synthetic evidence in all three formats and poll each job. This checks execution and result shape, not fraud detection accuracy. The full run makes paid provider calls and stores three synthetic evaluations.
 
-`/api/ready` verifies both configured provider keys against their account endpoints without making billable model calls. A `503 MODEL_PROVIDERS_UNAVAILABLE` response identifies providers whose keys were rejected or could not be checked. Recheck the corresponding Render secret and redeploy; do not copy the key into logs or issue reports.
+`/api/ready` verifies the configured OpenRouter key against its account endpoint without making a billable model call. A `503 MODEL_PROVIDERS_UNAVAILABLE` response means the key was rejected or could not be checked. Recheck the Render secret and redeploy; do not copy the key into logs or issue reports. Authentication does not prove model availability, output quality, or sufficient credits.
+
+Before allowing public traffic, set an [OpenRouter key budget and model allowlist](https://openrouter.ai/docs/guides/features/guardrails/overview) for `google/gemma-4-26b-a4b-it`. Choose a spending cap you can afford. A budget rejection will fail the job rather than consume more credits. The backend IP rate limiter is in-memory and cannot enforce an account-wide budget across instances or restarts. User authentication and durable per-user quotas are still needed before an open public launch.
 
 The `Verify deployed backend` GitHub Actions workflow checks the configured Render URL daily and can be run manually with a different backend URL. It fails when the URL serves Streamlit HTML or the API is unconfigured. GitHub Actions secrets are not needed for this read-only deployment check. The manual `run_media_pipeline` option runs the synthetic three-format check against a ready backend and uses provider credits.
 
@@ -182,7 +183,7 @@ pip install -r requirements.txt
 
 # 3. Configure environment
 cp .env.example .env
-# Edit .env with both OPENROUTER_API_KEY and FEATHERLESS_API_KEY
+# Edit .env with OPENROUTER_API_KEY
 
 # 4. Start Backend API
 uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload

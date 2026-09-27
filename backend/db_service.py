@@ -111,7 +111,7 @@ def save_evaluation(
     severity_tier: Optional[str] = None,
     recommended_action: Optional[str] = None
 ) -> int:
-    """Saves a completed multi-agent analysis record to the database."""
+    """Save a completed visual screening record to the database."""
     conn = get_connection()
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
