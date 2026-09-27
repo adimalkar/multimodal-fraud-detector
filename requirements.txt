@@ -10,4 +10,5 @@ python-multipart
 boto3
 psycopg2-binary
 c2pa-python==0.37.12
+pypdf==6.19.0
 # Cache Buster: 1772759748

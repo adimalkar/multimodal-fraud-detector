@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from pypdf import PdfWriter
 
 from backend import app as app_module
 from backend import db_service
@@ -24,6 +25,14 @@ def image_bytes(color="white"):
     image = Image.new("RGB", (16, 16), color)
     output = io.BytesIO()
     image.save(output, format="JPEG")
+    return output.getvalue()
+
+
+def pdf_bytes():
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    output = io.BytesIO()
+    writer.write(output)
     return output.getvalue()
 
 
@@ -126,6 +135,89 @@ def test_image_evidence_job_needs_no_provider_or_paid_call(client, monkeypatch):
     assert completed["result"]["model_usage"]["cost"] == 0
     assert completed["result"]["task_results"][0]["state"] == "valid_untrusted"
     assert completed["result"]["task_results"][1]["status"] == "inconclusive"
+
+
+def test_pdf_evidence_job_is_queued_for_new_worker_and_needs_no_provider(client, monkeypatch):
+    monkeypatch.setenv("PDF_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+
+    def forbid_model_call(*args):
+        raise AssertionError("PDF structure path must not call the model")
+
+    monkeypatch.setattr(app_module, "execute_agent_analysis", forbid_model_call)
+    submitted = client.post(
+        "/api/analyze", headers=headers(),
+        files={"file": ("invoice.pdf", pdf_bytes(), "application/pdf")},
+    )
+    assert submitted.status_code == 200
+    job_id = submitted.json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    assert store.get(job_id, "tenant-a")["status"] == "queued_pdf"
+    assert store.get(job_id, "tenant-a")["pipeline_version"] == "pdf-evidence-v1"
+    assert client.get(f"/api/jobs/{job_id}", headers=headers()).json()["status"] == "queued"
+
+    assert run_once(store, artifacts)
+    job = store.get(job_id, "tenant-a")
+    assert job["billing_started"] == 0
+    completed = client.get(f"/api/jobs/{job_id}", headers=headers()).json()
+    assert completed["status"] == "completed"
+    assert completed["result"]["model_usage"] == {"cost": 0.0, "calls": 0}
+    assert completed["result"]["task_results"][0]["coverage"]["pages_inspected"] == 1
+    assert completed["result"]["task_results"][1]["status"] == "inconclusive"
+
+
+def test_image_pdf_batch_uses_two_evidence_queues_without_model(client, monkeypatch):
+    monkeypatch.setenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setenv("PDF_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+    response = client.post(
+        "/api/batch/analyze", headers=headers(), files=[
+            ("files", ("photo.jpg", image_bytes(), "image/jpeg")),
+            ("files", ("invoice.pdf", pdf_bytes(), "application/pdf")),
+        ],
+    )
+    assert response.status_code == 200
+    store, _ = app_module.durable_components()
+    children = store.children(response.json()["batch_id"], "tenant-a")
+    assert {row["status"] for row in children} == {"queued_image", "queued_pdf"}
+    assert all(item["status"] == "queued" for item in client.get(
+        f"/api/batch/{response.json()['batch_id']}", headers=headers()
+    ).json()["items"])
+
+
+def test_pdf_artifact_retry_stays_in_pdf_queue(client, monkeypatch):
+    monkeypatch.setenv("PDF_EVIDENCE_PIPELINE_ENABLED", "1")
+    submitted = client.post(
+        "/api/analyze", headers=headers(),
+        files={"file": ("invoice.pdf", pdf_bytes(), "application/pdf")},
+    )
+    assert submitted.status_code == 200
+    store, artifacts = app_module.durable_components()
+    original_materialize = artifacts.materialize
+    failures = [True]
+
+    def fail_once(*args):
+        if failures:
+            failures.clear()
+            raise OSError("temporary storage outage")
+        return original_materialize(*args)
+
+    monkeypatch.setattr(artifacts, "materialize", fail_once)
+    assert run_once(store, artifacts)
+    assert store.get(submitted.json()["job_id"], "tenant-a")["status"] == "queued_pdf"
+    assert run_once(store, artifacts)
+    assert store.get(submitted.json()["job_id"], "tenant-a")["status"] == "completed"
+
+
+def test_pdf_idempotency_cannot_replay_across_pipeline_versions(client, monkeypatch):
+    data = pdf_bytes()
+    files = {"file": ("invoice.pdf", data, "application/pdf")}
+    request_headers = headers(**{"Idempotency-Key": "pdf-version-change"})
+    first = client.post("/api/analyze", headers=request_headers, files=files)
+    assert first.status_code == 200
+    monkeypatch.setenv("PDF_EVIDENCE_PIPELINE_ENABLED", "1")
+    replay = client.post("/api/analyze", headers=request_headers, files=files)
+    assert replay.status_code == 409
 
 
 def test_image_only_batch_skips_provider_but_mixed_batch_requires_it(client, monkeypatch):

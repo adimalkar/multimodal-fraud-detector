@@ -15,6 +15,7 @@ from backend.durable_auth import configured_tokens, require_tenant
 from backend.durable_jobs import SCHEMA_VERSION, IdempotencyConflict, JobBusy, QuotaExceeded
 from backend.durable_worker import build_components, delete_private_job, run_once
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
+from backend.pdf_evidence import PDF_PIPELINE_VERSION
 
 try:
     from backend.guardrails import (
@@ -126,6 +127,25 @@ def image_evidence_mode(file: UploadFile) -> bool:
     return media_type == "Image"
 
 
+def pdf_evidence_mode(file: UploadFile) -> bool:
+    if os.getenv("PDF_EVIDENCE_PIPELINE_ENABLED", "0") != "1":
+        return False
+    media_type, _ = detect_media_type(file.filename, file.content_type or "")
+    return media_type == "Document"
+
+
+def evidence_pipeline_version(file: UploadFile) -> str:
+    if image_evidence_mode(file):
+        return IMAGE_PIPELINE_VERSION
+    if pdf_evidence_mode(file):
+        return PDF_PIPELINE_VERSION
+    return SCHEMA_VERSION
+
+
+def public_queue_status(status: str) -> str:
+    return "queued" if status in {"queued_image", "queued_pdf"} else status
+
+
 @lru_cache(maxsize=1)
 def durable_components():
     try:
@@ -168,7 +188,7 @@ def durable_enqueue(background_tasks, request, owner_id, uploads):
                 "artifact_sha256": digest,
                 "size": size,
                 "pipeline_version": (
-                    IMAGE_PIPELINE_VERSION if image_evidence_mode(file) else SCHEMA_VERSION
+                    evidence_pipeline_version(file)
                 ),
             })
         if sum(spec["size"] for spec in specs) > int(os.getenv("DURABLE_MAX_BATCH_BYTES", "104857600")):
@@ -219,7 +239,7 @@ def durable_process_pending(max_items: int):
 def durable_item_response(job):
     return {
         "job_id": job["id"],
-        "status": "queued" if job["status"] == "queued_image" else job["status"],
+        "status": public_queue_status(job["status"]),
         "progress": job["progress"], "stage": job["stage"],
         "elapsed_seconds": round(time.time() - job["created_at"], 1),
         "result": json.loads(job["result_json"]) if job["result_json"] else None,
@@ -262,7 +282,7 @@ def durable_batch_response(parent, children):
             {
                 "item_id": row["item_index"], "filename": row["filename"],
                 "media_type": row["media_type"],
-                "status": "queued" if row["status"] == "queued_image" else row["status"],
+                "status": public_queue_status(row["status"]),
                 "result": json.loads(row["result_json"]) if row["result_json"] else None,
                 "error": row["error_message"],
             }
@@ -714,12 +734,12 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
             raise HTTPException(status_code=400, detail="No file provided")
         validate_file_extension(file.filename)
         validate_file_size(file)
-        if not image_evidence_mode(file):
+        if evidence_pipeline_version(file) == SCHEMA_VERSION:
             await asyncio.to_thread(ensure_analysis_available)
         job = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, [file])
         return {
             "job_id": job["id"],
-            "status": "queued" if job["status"] == "queued_image" else job["status"],
+            "status": public_queue_status(job["status"]),
             "media_type": job["media_type"], "filename": job["filename"],
             "message": "Analysis queued. Poll /api/jobs/{job_id} for progress.",
         }
@@ -869,7 +889,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
         for file in files:
             validate_file_extension(file.filename)
             validate_file_size(file)
-        if not all(image_evidence_mode(file) for file in files):
+        if any(evidence_pipeline_version(file) == SCHEMA_VERSION for file in files):
             await asyncio.to_thread(ensure_analysis_available)
         if len(files) == 1:
             raise HTTPException(status_code=400, detail="Use /api/analyze for one file")
