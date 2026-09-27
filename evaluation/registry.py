@@ -117,8 +117,11 @@ def load_registry(manifest: Path, data_root: Path, *, verify_files: bool = True)
             if verify_files:
                 if not file_path.is_file():
                     raise ValueError(f"Line {line_number}: evidence file is missing")
+                hasher = hashlib.sha256()
                 with file_path.open("rb") as evidence_stream:
-                    digest = hashlib.file_digest(evidence_stream, "sha256").hexdigest()
+                    while chunk := evidence_stream.read(64 * 1024):
+                        hasher.update(chunk)
+                digest = hasher.hexdigest()
                 if digest != sha256:
                     raise ValueError(f"Line {line_number}: SHA-256 mismatch for {item_id}")
             items.append(
