@@ -12,6 +12,7 @@ import uuid
 from backend.durable_jobs import SCHEMA_VERSION, DurableJobStore, QueueUnavailable
 from backend.evidence_artifacts import EvidenceArtifactStore
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
+from backend.pdf_evidence import PDF_PIPELINE_VERSION
 
 LOGGER = logging.getLogger(__name__)
 WORKER_ID = uuid.uuid4().hex
@@ -69,6 +70,12 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
             result = analyze_image_evidence(
                 str(materialized), job["content_type"], job["artifact_sha256"]
             )
+        elif job["pipeline_version"] == PDF_PIPELINE_VERSION:
+            from backend.pdf_evidence import analyze_pdf_evidence
+
+            result = analyze_pdf_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
         elif job["pipeline_version"] == SCHEMA_VERSION:
             store.mark_billing_started(job["id"], token)
             billed = True
@@ -113,6 +120,7 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
                 job["id"], token, code, message, retry=retry,
                 retry_status=(
                     "queued_image" if job["pipeline_version"] == IMAGE_PIPELINE_VERSION
+                    else "queued_pdf" if job["pipeline_version"] == PDF_PIPELINE_VERSION
                     else "queued"
                 ),
             )
