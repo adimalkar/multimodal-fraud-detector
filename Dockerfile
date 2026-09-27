@@ -29,9 +29,6 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application files
 COPY --chown=user . .
 
-# Initialize database schema if not present
-RUN python database/init_db.py || true
-
 # Default Hugging Face Space port is 7860, Render uses $PORT
 ENV PORT=7860
 EXPOSE 7860
