@@ -80,24 +80,9 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
             "calibrated_score": None,
             "limitations": "Single unvalidated vision model; specialist checks have not run.",
         }]
-        # Analytics are a derived projection. The durable job result is the source of truth.
-        try:
-            from backend.db_service import save_evaluation
-
-            risk = result.get("multimodal_risk") or {}
-            save_evaluation(
-                filename=job["filename"], media_type=job["media_type"],
-                ai_prediction=result["classification"], confidence=result["confidence"],
-                final_reasoning=result.get("reason", ""),
-                vision_findings=result.get("vision_findings", ""),
-                processing_time=result.get("elapsed_seconds", 0),
-                risk_score=risk.get("risk_score"),
-                severity_tier=risk.get("severity_tier"),
-                recommended_action=risk.get("recommended_action"),
-                job_id=job["id"],
-            )
-        except Exception as error:  # noqa: BLE001 - derived analytics must not block job result
-            LOGGER.warning("Analytics projection failed: %s", type(error).__name__)
+        # Keep the durable result as the only persisted analysis record. Writing a
+        # second database here can race with lease loss or evidence deletion and
+        # leave a private result behind after its job has disappeared.
         store.complete(job["id"], token, result)
     except Exception as error:  # noqa: BLE001 - per-job failure isolation
         retry = not billed and job["attempts"] < 2 and isinstance(error, OSError)

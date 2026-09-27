@@ -10,8 +10,13 @@ from PIL import Image
 
 from backend import app as app_module
 from backend import db_service
-from backend.durable_jobs import DurableJobStore
-from backend.durable_worker import build_components, run_once
+from backend.durable_jobs import DurableJobStore, QueueUnavailable
+from backend.durable_worker import (
+    build_components,
+    delete_private_job,
+    prune_expired,
+    run_once,
+)
 
 
 def image_bytes(color="white"):
@@ -91,6 +96,27 @@ def test_job_survives_new_store_instance_and_runs_once(client, monkeypatch):
     assert completed["status"] == "completed"
     assert completed["result"]["classification"] == "Real"
     assert completed["pipeline_version"] == "screening-v1"
+
+
+def test_lost_lease_does_not_write_legacy_analytics(client, monkeypatch):
+    job_id = submit(client).json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    monkeypatch.setattr(app_module, "execute_agent_analysis", lambda *args: {
+        "classification": "Real", "confidence": 0.8,
+        "reason": "Controlled", "vision_findings": "Controlled",
+        "elapsed_seconds": 0.1, "model_usage": {"cost": 0.001},
+    })
+    analytics_writes = []
+    monkeypatch.setattr(db_service, "save_evaluation", lambda **kwargs: analytics_writes.append(kwargs))
+
+    def lose_lease(*args):
+        raise QueueUnavailable("Job lease was lost")
+
+    monkeypatch.setattr(store, "complete", lose_lease)
+
+    assert run_once(store, artifacts)
+    assert analytics_writes == []
+    assert store.get(job_id, "tenant-a")["status"] == "failed"
 
 
 def test_auth_and_tenant_scoped_job_reads(client):
@@ -216,6 +242,29 @@ def test_owner_can_delete_queued_evidence_and_analytics(client, tmp_path):
     deleted = client.delete(f"/api/jobs/{job_id}", headers=headers())
     assert deleted.status_code == 200
     assert client.get(f"/api/jobs/{job_id}", headers=headers()).status_code == 404
+    assert list((tmp_path / "artifacts").iterdir()) == []
+
+
+def test_failed_delete_is_retried_before_retention_deadline(client, monkeypatch, tmp_path):
+    job_id = submit(client).json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    original_delete = artifacts.delete
+    failures = [True]
+
+    def fail_once(key):
+        if failures:
+            failures.clear()
+            raise OSError("storage temporarily unavailable")
+        original_delete(key)
+
+    monkeypatch.setattr(artifacts, "delete", fail_once)
+    with pytest.raises(OSError, match="storage temporarily unavailable"):
+        delete_private_job(store, artifacts, "tenant-a", job_id, "item")
+    assert store.get(job_id, "tenant-a")["status"] == "deleting"
+    assert len(list((tmp_path / "artifacts").iterdir())) == 1
+
+    prune_expired(store, artifacts)
+    assert store.get(job_id, "tenant-a") is None
     assert list((tmp_path / "artifacts").iterdir()) == []
 
 

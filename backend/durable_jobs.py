@@ -487,8 +487,11 @@ class DurableJobStore:
         try:
             return [dict(row) for row in self._execute(conn, """
                 SELECT id, owner_id, kind FROM durable_jobs
-                WHERE parent_id IS NULL AND created_at<? AND status!='processing'
-                ORDER BY created_at LIMIT ?
+                WHERE parent_id IS NULL AND (
+                    status='deleting' OR (created_at<? AND status!='processing')
+                )
+                ORDER BY CASE WHEN status='deleting' THEN 0 ELSE 1 END, created_at
+                LIMIT ?
             """, (time.time() - retention_seconds, limit)).fetchall()]
         finally:
             conn.close()
