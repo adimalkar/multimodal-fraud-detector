@@ -122,6 +122,7 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/` | Service status, active version, guardrail configs | `200 OK` |
 | `GET` | `/api/health` | Health check & queue worker status (used for keepalives) | `200 OK` |
+| `GET` | `/api/ready` | Confirms model credentials are configured for analysis | `200 OK` / `503` |
 | `POST` | `/api/analyze` | Submit single media file for asynchronous analysis | `200 OK` (returns `job_id`) |
 | `GET` | `/api/jobs/{job_id}` | Poll single job progress, stage, jury votes, and risk score | `200 OK` / `404` |
 | `POST` | `/api/batch/analyze` | Submit multiple files for sequential zero-OOM evaluation | `200 OK` (returns `batch_id`) |
@@ -133,6 +134,8 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | `GET` | `/api/analytics/evaluations` | Paginated claim evaluation history | `200 OK` |
 | `GET` | `/api/analytics/export-csv` | Stream full evaluation history as CSV report | `200 OK` |
 | `POST` | `/analyze_media` | Synchronous evaluation endpoint for legacy compatibility | `200 OK` |
+
+Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before creating a job when required model credentials are absent. A batch whose every item fails has status `failed`; partial batches retain successful results and report failed items individually. Readiness checks configuration only and do not call external model providers.
 
 ---
 
@@ -150,6 +153,7 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 2. Select **Docker** (Blank) and Free Hardware (2 vCPU, 16GB RAM).
 3. Under **Settings → Variables and Secrets**, add:
    - `OPENROUTER_API_KEY`: Your OpenRouter API key.
+   - `FEATHERLESS_API_KEY`: Your Featherless API key. Both provider keys are required by the current analysis pipeline.
    - `DATABASE_URL`: Your Supabase/Neon PostgreSQL connection string (optional).
 4. Push this repository to your Space:
    ```bash
@@ -194,7 +198,7 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env and supply your OPENROUTER_API_KEY
+# Edit .env and supply both OPENROUTER_API_KEY and FEATHERLESS_API_KEY
 ```
 
 ### 3. Running the Stack Locally
@@ -213,6 +217,13 @@ Navigate to:
 - **Frontend App**: [http://localhost:3000](http://localhost:3000)
 - **Interactive API Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **Analytics Dashboard**: [http://localhost:3000/analytics](http://localhost:3000/analytics)
+
+Verify the backend response before connecting the frontend or deploying it:
+```bash
+python scripts/check_backend.py http://localhost:8000 --allow-unconfigured
+# Omit --allow-unconfigured on a deployment that should accept real analysis jobs.
+```
+The check validates JSON response bodies and the OpenAPI route list, so a different app returning `200` HTML does not pass.
 
 ---
 

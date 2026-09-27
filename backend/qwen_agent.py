@@ -25,6 +25,16 @@ except ImportError:
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 FEATHERLESS_API_KEY = os.getenv("FEATHERLESS_API_KEY", "").strip()
 
+
+def missing_model_credentials():
+    """Report provider credentials required by the current analysis pipeline."""
+    missing = []
+    if not OPENROUTER_API_KEY:
+        missing.append("OPENROUTER_API_KEY")
+    if not FEATHERLESS_API_KEY:
+        missing.append("FEATHERLESS_API_KEY")
+    return missing
+
 from PIL import Image
 import io
 
@@ -466,10 +476,9 @@ def analyze_media(file_path, content_type, media_type="Image"):
     to 3 different LLM Critics for majority voting with confidence calibration.
     Supports both images and PDF documents.
     """
-    if not OPENROUTER_API_KEY:
-        raise Exception("OPENROUTER_API_KEY environment variable not set.")
-    if not FEATHERLESS_API_KEY:
-        raise Exception("FEATHERLESS_API_KEY environment variable not set.")
+    missing = missing_model_credentials()
+    if missing:
+        raise RuntimeError(f"Missing model provider credentials: {', '.join(missing)}")
     
     # Handle PDF documents vs images
     is_document = media_type == "Document"
@@ -661,6 +670,10 @@ def analyze_video(file_path):
     2. Run each keyframe through the standard Image pipeline.
     3. Aggregate the frame-level results into a video-level verdict.
     """
+    missing = missing_model_credentials()
+    if missing:
+        raise RuntimeError(f"Missing model provider credentials: {', '.join(missing)}")
+
     print(f"  Extracting keyframes from video: {file_path}")
     frames_b64 = extract_video_frames(file_path, num_frames=5)
     print(f"  Extracted {len(frames_b64)} frames for analysis.")
@@ -669,6 +682,7 @@ def analyze_video(file_path):
         raise Exception("Failed to extract any frames from the video.")
         
     frame_results = []
+    frame_errors = []
     
     # Process each frame through the image pipeline
     # We create a temporary function that mimics `analyze_media` but accepts direct b64 instead of a file
@@ -683,12 +697,18 @@ def analyze_video(file_path):
             try:
                 # Treat each frame directly as an Image
                 result = analyze_media(tmp_path, "image/jpeg", media_type="Image")
+                if result.get("classification") not in {"Real", "Fake"}:
+                    raise RuntimeError(result.get("reason") or "Frame analysis returned no valid verdict")
                 frame_results.append(result)
             except Exception as e:
+                frame_errors.append(str(e))
                 print(f"  ⚠ Failed to analyze frame {i+1}: {e}")
                 
     if not frame_results:
-        raise Exception("Failed to analyze any of the extracted video frames.")
+        first_error = frame_errors[0] if frame_errors else "unknown error"
+        raise RuntimeError(
+            f"All {len(frames_b64)} video frames failed analysis. First failure: {first_error}"
+        )
 
     # Video-Level Aggregation Logic
     # If >= 60% of frames are fake, the video is fake (e.g., 3 out of 5 frames)
