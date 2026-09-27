@@ -12,8 +12,9 @@ from functools import lru_cache
 from typing import Dict, Any, Optional, List
 
 from backend.durable_auth import configured_tokens, require_tenant
-from backend.durable_jobs import IdempotencyConflict, JobBusy, QuotaExceeded
+from backend.durable_jobs import SCHEMA_VERSION, IdempotencyConflict, JobBusy, QuotaExceeded
 from backend.durable_worker import build_components, delete_private_job, run_once
+from backend.image_evidence import IMAGE_PIPELINE_VERSION
 
 try:
     from backend.guardrails import (
@@ -118,6 +119,13 @@ DURABLE_JOBS_ENABLED = os.getenv("DURABLE_JOBS_ENABLED", "0") == "1"
 DURABLE_EXECUTION_MODE = os.getenv("DURABLE_EXECUTION_MODE", "external")
 
 
+def image_evidence_mode(file: UploadFile) -> bool:
+    if os.getenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "0") != "1":
+        return False
+    media_type, _ = detect_media_type(file.filename, file.content_type or "")
+    return media_type == "Image"
+
+
 @lru_cache(maxsize=1)
 def durable_components():
     try:
@@ -159,11 +167,21 @@ def durable_enqueue(background_tasks, request, owner_id, uploads):
                 "artifact_key": key,
                 "artifact_sha256": digest,
                 "size": size,
+                "pipeline_version": (
+                    IMAGE_PIPELINE_VERSION if image_evidence_mode(file) else SCHEMA_VERSION
+                ),
             })
         if sum(spec["size"] for spec in specs) > int(os.getenv("DURABLE_MAX_BATCH_BYTES", "104857600")):
             raise HTTPException(status_code=413, detail="Batch exceeds total size limit")
         fingerprint = hashlib.sha256(json.dumps(
-            [(spec["filename"], spec["artifact_sha256"]) for spec in specs],
+            [
+                (
+                    spec["filename"], spec["artifact_sha256"], spec["pipeline_version"]
+                ) if spec["pipeline_version"] != SCHEMA_VERSION else (
+                    spec["filename"], spec["artifact_sha256"]
+                )
+                for spec in specs
+            ],
             separators=(",", ":"),
         ).encode()).hexdigest()
         primary, created = store.create(
@@ -200,7 +218,8 @@ def durable_process_pending(max_items: int):
 
 def durable_item_response(job):
     return {
-        "job_id": job["id"], "status": job["status"],
+        "job_id": job["id"],
+        "status": "queued" if job["status"] == "queued_image" else job["status"],
         "progress": job["progress"], "stage": job["stage"],
         "elapsed_seconds": round(time.time() - job["created_at"], 1),
         "result": json.loads(job["result_json"]) if job["result_json"] else None,
@@ -242,7 +261,8 @@ def durable_batch_response(parent, children):
         "items": [
             {
                 "item_id": row["item_index"], "filename": row["filename"],
-                "media_type": row["media_type"], "status": row["status"],
+                "media_type": row["media_type"],
+                "status": "queued" if row["status"] == "queued_image" else row["status"],
                 "result": json.loads(row["result_json"]) if row["result_json"] else None,
                 "error": row["error_message"],
             }
@@ -694,10 +714,12 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
             raise HTTPException(status_code=400, detail="No file provided")
         validate_file_extension(file.filename)
         validate_file_size(file)
-        await asyncio.to_thread(ensure_analysis_available)
+        if not image_evidence_mode(file):
+            await asyncio.to_thread(ensure_analysis_available)
         job = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, [file])
         return {
-            "job_id": job["id"], "status": job["status"],
+            "job_id": job["id"],
+            "status": "queued" if job["status"] == "queued_image" else job["status"],
             "media_type": job["media_type"], "filename": job["filename"],
             "message": "Analysis queued. Poll /api/jobs/{job_id} for progress.",
         }
@@ -847,7 +869,8 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
         for file in files:
             validate_file_extension(file.filename)
             validate_file_size(file)
-        await asyncio.to_thread(ensure_analysis_available)
+        if not all(image_evidence_mode(file) for file in files):
+            await asyncio.to_thread(ensure_analysis_available)
         if len(files) == 1:
             raise HTTPException(status_code=400, detail="Use /api/analyze for one file")
         batch = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, files)

@@ -9,5 +9,5 @@ httpx
 python-multipart
 boto3
 psycopg2-binary
+c2pa-python==0.37.12
 # Cache Buster: 1772759748
-

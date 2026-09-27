@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -96,6 +97,109 @@ def test_job_survives_new_store_instance_and_runs_once(client, monkeypatch):
     assert completed["status"] == "completed"
     assert completed["result"]["classification"] == "Real"
     assert completed["pipeline_version"] == "screening-v1"
+
+
+def test_image_evidence_job_needs_no_provider_or_paid_call(client, monkeypatch):
+    monkeypatch.setenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+
+    def forbid_model_call(*args):
+        raise AssertionError("Image provenance path must not call the model")
+
+    monkeypatch.setattr(app_module, "execute_agent_analysis", forbid_model_call)
+    signed = Path(__file__).parent / "fixtures" / "c2pa_valid_untrusted.jpg"
+    submitted = submit(client, signed.read_bytes())
+    assert submitted.status_code == 200
+    assert submitted.json()["status"] == "queued"
+    job_id = submitted.json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    assert store.get(job_id, "tenant-a")["pipeline_version"] == "image-evidence-v1"
+    assert store.get(job_id, "tenant-a")["status"] == "queued_image"
+    assert client.get(f"/api/jobs/{job_id}", headers=headers()).json()["status"] == "queued"
+
+    assert run_once(store, artifacts)
+    job = store.get(job_id, "tenant-a")
+    assert job["billing_started"] == 0
+    completed = client.get(f"/api/jobs/{job_id}", headers=headers()).json()
+    assert completed["status"] == "completed"
+    assert completed["pipeline_version"] == "image-evidence-v1"
+    assert completed["result"]["model_usage"]["cost"] == 0
+    assert completed["result"]["task_results"][0]["state"] == "valid_untrusted"
+    assert completed["result"]["task_results"][1]["status"] == "inconclusive"
+
+
+def test_image_only_batch_skips_provider_but_mixed_batch_requires_it(client, monkeypatch):
+    monkeypatch.setenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+    images = [
+        ("files", ("one.jpg", image_bytes("white"), "image/jpeg")),
+        ("files", ("two.jpg", image_bytes("black"), "image/jpeg")),
+    ]
+    accepted = client.post("/api/batch/analyze", headers=headers(), files=images)
+    assert accepted.status_code == 200
+    batch_id = accepted.json()["batch_id"]
+    store, _ = app_module.durable_components()
+    assert {row["pipeline_version"] for row in store.children(batch_id, "tenant-a")} == {
+        "image-evidence-v1"
+    }
+
+    mixed = client.post(
+        "/api/batch/analyze", headers=headers(),
+        files=[images[0], ("files", ("paper.pdf", b"%PDF-1.4", "application/pdf"))],
+    )
+    assert mixed.status_code == 503
+
+
+def test_idempotency_key_cannot_replay_across_image_pipeline_versions(client, monkeypatch):
+    data = image_bytes()
+    first = submit(client, data, extra_headers={"Idempotency-Key": "version-change"})
+    assert first.status_code == 200
+    monkeypatch.setenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "1")
+    replay = submit(client, data, extra_headers={"Idempotency-Key": "version-change"})
+    assert replay.status_code == 409
+
+
+def test_unknown_queued_pipeline_version_fails_before_billing(client, monkeypatch):
+    store, artifacts = app_module.durable_components()
+    key, digest, _ = artifacts.put_upload(io.BytesIO(image_bytes()), "claim.jpg")
+    job, _ = store.create(
+        "tenant-a", [{
+            "filename": "claim.jpg", "media_type": "Image", "content_type": "image/jpeg",
+            "artifact_key": key, "artifact_sha256": digest,
+            "pipeline_version": "unknown-future-version",
+        }], idempotency_key=None, request_fingerprint="unknown-version",
+        max_daily_jobs=20, max_daily_reserved_usd=1, reserve_per_job_usd=0.01,
+    )
+
+    def forbid_model_call(*args):
+        raise AssertionError("Unknown version must not use a paid fallback")
+
+    monkeypatch.setattr(app_module, "execute_agent_analysis", forbid_model_call)
+    assert run_once(store, artifacts)
+    failed = store.get(job["id"], "tenant-a")
+    assert failed["status"] == "failed"
+    assert failed["error_code"] == "UNSUPPORTED_PIPELINE_VERSION"
+    assert failed["billing_started"] == 0
+
+
+def test_image_artifact_retry_stays_in_image_queue(client, monkeypatch):
+    monkeypatch.setenv("IMAGE_EVIDENCE_PIPELINE_ENABLED", "1")
+    job_id = submit(client).json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    original_materialize = artifacts.materialize
+    failures = [True]
+
+    def fail_once(*args):
+        if failures:
+            failures.clear()
+            raise OSError("temporary storage outage")
+        return original_materialize(*args)
+
+    monkeypatch.setattr(artifacts, "materialize", fail_once)
+    assert run_once(store, artifacts)
+    assert store.get(job_id, "tenant-a")["status"] == "queued_image"
+    assert run_once(store, artifacts)
+    assert store.get(job_id, "tenant-a")["status"] == "completed"
 
 
 def test_lost_lease_does_not_write_legacy_analytics(client, monkeypatch):

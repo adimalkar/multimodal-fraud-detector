@@ -19,6 +19,8 @@ pinned: false
 
 **FraudSight AI** is an in-progress visual evidence screening application for images, PDFs, and videos. The backend samples bounded visual inputs, sends one request to an OpenRouter vision model, and combines its provisional result with extracted metadata. A model verdict is not proof of AI generation or insurance fraud; every result requires human review.
 
+The opt-in durable backend also has a zero-model-call image provenance path. It verifies embedded C2PA against stored original bytes and explicitly abstains on AI-image classification; see [Phase 2a image evidence](docs/PHASE2_IMAGE_EVIDENCE.md). This path is not active on the public site.
+
 The repository includes a Next.js frontend, a FastAPI backend, optional object storage, and PostgreSQL or SQLite persistence. OpenRouter calls are billed even when the hosting tier is free.
 
 ---
