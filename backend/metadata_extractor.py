@@ -12,7 +12,7 @@ SUSPICIOUS_SOFTWARE_KEYWORDS = [
 ]
 
 def extract_image_metadata(file_path: str) -> Dict[str, Any]:
-    """Extracts EXIF metadata, camera tags, and forensic software flags from images."""
+    """Extract image metadata and unverified contextual observations."""
     flags: List[str] = []
     meta: Dict[str, Any] = {
         "format": "Unknown",
@@ -31,9 +31,9 @@ def extract_image_metadata(file_path: str) -> Dict[str, Any]:
             meta["dimensions"] = f"{img.width}x{img.height}"
             meta["mode"] = img.mode
 
-            # Check for square dimensions typical of popular AI generative models (512x512, 1024x1024)
+            # Square dimensions occur in both genuine crops and generated images.
             if img.width == img.height and img.width in [512, 768, 1024, 1536]:
-                flags.append(f"Image has exact square dimension ({img.width}x{img.height}) characteristic of AI generators")
+                flags.append(f"Image dimensions are {img.width}x{img.height}; dimensions alone do not establish origin")
 
             exif_data = img._getexif()
             if exif_data:
@@ -49,21 +49,21 @@ def extract_image_metadata(file_path: str) -> Dict[str, Any]:
                 meta["modified_at"] = parsed_exif.get("DateTime")
                 meta["has_gps"] = "GPSInfo" in parsed_exif
 
-                # Check for suspicious editing software
+                # Software tags are editable and do not authenticate the file.
                 if meta["software"]:
                     software_str = str(meta["software"]).strip()
                     for keyword in SUSPICIOUS_SOFTWARE_KEYWORDS:
                         if keyword in software_str.lower():
-                            flags.append(f"Post-processing or AI editing signature detected in metadata: {software_str}")
+                            flags.append(f"Software tag reports {software_str}; this tag is not independently verified")
                             break
 
-                # Check for timestamp divergence
+                # A date difference can reflect ordinary editing or export.
                 if meta["created_at"] and meta["modified_at"] and meta["created_at"] != meta["modified_at"]:
-                    flags.append("Original capture timestamp differs from modification timestamp")
+                    flags.append("Capture and modification date tags differ; this can reflect ordinary editing")
             else:
-                # If everyday photo format has completely stripped EXIF metadata
+                # Sharing and export frequently remove EXIF.
                 if meta["format"] in ["JPEG", "JPG"]:
-                    flags.append("Camera sensor & hardware EXIF metadata is completely stripped or absent")
+                    flags.append("No EXIF tags found; absence does not establish image origin")
 
     except Exception as e:
         flags.append(f"Metadata parsing notice: {e}")
@@ -75,7 +75,7 @@ def extract_image_metadata(file_path: str) -> Dict[str, Any]:
     }
 
 def extract_pdf_metadata(file_path: str) -> Dict[str, Any]:
-    """Inspects PDF document stream headers for producer and editor software signatures."""
+    """Extract PDF header metadata as unverified context."""
     flags: List[str] = []
     meta: Dict[str, Any] = {
         "format": "PDF",
@@ -114,15 +114,15 @@ def extract_pdf_metadata(file_path: str) -> Dict[str, Any]:
         if mod_match:
             meta["mod_date"] = mod_match.group(1).strip()
 
-        # Check for editing tools
+        # Editing tools and conversion services are routine in valid PDFs.
         combined_tools = f"{meta.get('creator') or ''} {meta.get('producer') or ''}".lower()
         for kw in SUSPICIOUS_SOFTWARE_KEYWORDS:
             if kw in combined_tools:
-                flags.append(f"Document was created/modified using editing or online conversion tool: {kw.capitalize()}")
+                flags.append(f"PDF tool tag mentions {kw.capitalize()}; this does not establish forgery")
                 break
 
         if meta["creation_date"] and meta["mod_date"] and meta["creation_date"] != meta["mod_date"]:
-            flags.append("Document modified date does not match creation date")
+            flags.append("PDF creation and modification date tags differ; this does not establish forgery")
 
     except Exception as e:
         flags.append(f"PDF metadata inspection error: {e}")
@@ -159,9 +159,9 @@ def extract_video_metadata(file_path: str) -> Dict[str, Any]:
             meta["total_frames"] = frames
             meta["duration_seconds"] = duration
 
-            # Low FPS anomaly check (often indicative of synthesized animation or GIF converted to MP4)
+            # Low frame rate occurs in genuine CCTV and exported clips.
             if 0 < fps < 15:
-                flags.append(f"Abnormally low frame rate detected ({fps:.1f} FPS), often associated with synthesized video")
+                flags.append(f"Video frame rate is {fps:.1f} FPS; frame rate alone does not establish origin")
 
             cap.release()
         else:
@@ -176,7 +176,7 @@ def extract_video_metadata(file_path: str) -> Dict[str, Any]:
     }
 
 def extract_metadata(file_path: str, media_type: str) -> Dict[str, Any]:
-    """Unified entry point to extract metadata and detect tampering flags across any media."""
+    """Extract metadata observations without treating them as proof of tampering."""
     if not os.path.exists(file_path):
         return {"metadata": {}, "flags_count": 0, "flags": []}
 

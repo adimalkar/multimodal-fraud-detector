@@ -8,7 +8,7 @@ app_port: 8000
 pinned: false
 ---
 
-# FraudSight AI — Multi-Agent Multimodal Fraud Detection
+# FraudSight AI — Visual Evidence Screening
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110.0-009688?style=flat&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-14.2.13-000000?style=flat&logo=next.js)](https://nextjs.org/)
@@ -17,9 +17,9 @@ pinned: false
 [![Cloudflare R2](https://img.shields.io/badge/Cloudflare_R2-10GB_Free-F38020?style=flat&logo=cloudflare)](https://developers.cloudflare.com/r2/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**FraudSight AI** is a decoupled, production-grade, zero-trust insurance fraud detection platform. It cross-examines multimedia claims—including high-resolution photographs, multi-page repair PDFs, and dashcam videos—using an ensemble of multi-modal vision models and independent reasoning LLM critics.
+**FraudSight AI** is an in-progress visual evidence screening application for images, PDFs, and videos. The backend samples bounded visual inputs, sends one request to an OpenRouter vision model, and combines its provisional result with extracted metadata. A model verdict is not proof of AI generation or insurance fraud; every result requires human review.
 
-Built to operate entirely within **100% Free-Tier Cloud Infrastructure**, FraudSight AI pairs a zero-cold-start **Next.js edge frontend** on Vercel with an asynchronous **FastAPI multi-agent brain** on Hugging Face Spaces (16GB RAM) or Render, **Cloudflare R2** zero-egress object storage, and **Supabase / Neon PostgreSQL** persistence.
+The repository includes a Next.js frontend, a FastAPI backend, optional object storage, and PostgreSQL or SQLite persistence. OpenRouter calls are billed even when the hosting tier is free.
 
 ---
 
@@ -38,10 +38,9 @@ flowchart TD
     subgraph API["AI Engine & API (FastAPI)"]
         GW["Rate Limiter & Guardrails\n(Sliding Window, File Size, Mime Check)"]
         Router["Job Queues & State Machine\n(POST /api/analyze, POST /api/batch/analyze)"]
-        Meta["Forensic Metadata Extractor\n(EXIF, GPS, Software, Provenance)"]
-        Vision["Vision Agent: Qwen-VL-Plus\n(Micro-Anomalies, Structural Artifacts)"]
-        Jury["Critic LLM Jury\n(Qwen Turbo, DeepSeek R1-0528, GLM 4.6)"]
-        Scorer["Multimodal Risk Scorer\n(Synergy Boost & Policy Engine)"]
+        Meta["Metadata Context\n(EXIF, Software, File Properties)"]
+        Vision["OpenRouter Vision Model\n(One bounded request per item)"]
+        Scorer["Provisional Risk Heuristic\n(Human review required)"]
     end
 
     subgraph Persistence["Audit Ledger & Analytics"]
@@ -55,8 +54,7 @@ flowchart TD
     UI -->|"4. Dispatch Job"| Router
     Router --> Meta
     Meta --> Vision
-    Vision --> Jury
-    Jury --> Scorer
+    Vision --> Scorer
     Scorer --> DB
     DB --> Export
     UI -->|"5. Poll /api/jobs/{id} or /api/batch/{id}"| Router
@@ -66,35 +64,23 @@ flowchart TD
 
 ## Key Features & Capabilities
 
-### 1. Multi-Agent Consensus Jury System
-No single AI model holds unchecked authority over a claim classification.
-- **Vision Specialist (`qwen/qwen-vl-plus`)**: Extracts forensic features, impossible reflections, specular inconsistencies, generative diffusion patterns, and compression anomalies.
-- **Independent LLM Critics**:
-  - `qwen/qwen-turbo` (OpenRouter): Logical consistency and physics cross-examination.
-  - `deepseek/deepseek-r1-0528` (Featherless AI): Multi-step deep reasoning chain-of-thought analysis hosted on independent serverless infrastructure.
-  - `google/gemini-2.5-pro` (OpenRouter): Document structural parsing and forensic verification.
-- **Consensus Protocol**: A calibrated majority vote determines the final classification (`Real` vs `Fake`).
+### 1. Bounded Visual Screening
+- **Default model**: `google/gemma-4-26b-a4b-it` through OpenRouter. `OPENROUTER_VISION_MODEL` accepts only the low-cost allowlist in `backend/qwen_agent.py`.
+- **One model request per item**: Up to one resized image, three rendered PDF pages, or three sampled video frames. A PDF exceeding three pages is rejected.
+- **Result**: A `Real`/`Fake` screening label, visible findings, uncalibrated model confidence, reported token usage/cost when available, and `needs_review: true`. Unsampled video moments are not assessed.
+- **Cost protection**: Configure a hard key spending limit and model allowlist in OpenRouter before public use. The application's in-memory IP limiter is not a billing cap.
 
 ### 2. Multimodal Risk Scoring Engine
-Rather than relying purely on binary classifications, FraudSight AI calculates an institutional-grade **Fraud Risk Score (0–100)**:
-- **Visual Evidence Weight (45%)**: Anomaly confidence from the vision inspection agent.
-- **Textual Evidence Weight (35%)**: Inter-critic concordance across logical jury members.
-- **Forensic Metadata Weight (20%)**: Penalties for stripped EXIF, generative editing software footprints, or missing camera hardware tags.
-- **Cross-Modal Synergy Boost**: Applies an automatic mathematical boost (up to +15 pts) when high visual suspicion coincides with abnormal metadata signatures.
+The existing response includes a provisional 0–1 visual screening score. Metadata observations are shown as context but contribute **zero** to this score: missing EXIF, square dimensions, editing software, changed timestamps, or low frame rate do not establish AI generation or fraud. There is no independent text score or cross-modal synergy. Model confidence is not calibrated against a labeled evaluation set. `recommended_action` is always `MANUAL_REVIEW`; the application must not use this score to approve or deny claims automatically.
 
-#### Policy Recommendation Matrix
-| Severity Tier | Risk Score | Policy Action | Workflow |
-| :--- | :--- | :--- | :--- |
-| **Critical** | 80 – 100 | `IMMEDIATE_DENIAL` | Automatically blocked from disbursement; routed to legal. |
-| **High** | 60 – 79 | `SIU_INVESTIGATION` | Dispatched to Special Investigation Unit with complete forensic dossier. |
-| **Medium** | 35 – 59 | `MANUAL_REVIEW` | Assigned to a senior adjuster for secondary human inspection. |
-| **Low** | 0 – 34 | `FAST_TRACK_APPROVAL` | Straight-through processing for genuine claims. |
+See [the model evaluation plan](docs/MODEL_EVALUATION_PLAN.md) for the labeled benchmark and cost gates needed before choosing a stronger model or adding a second paid call.
+See [the detector architecture review](docs/DETECTOR_ARCHITECTURE_REVIEW.md) for product and open-source comparisons, the original critic-jury audit, and modality-specific next steps.
 
-### 3. Forensic Metadata Extraction
-- **EXIF Analysis**: Extracts camera make, model, lens profile, focal length, exposure time, and ISO.
-- **Generative Software Detection**: Flags signatures from Photoshop, Stable Diffusion, Midjourney, Canvas, or GIMP.
-- **GPS Coordinates**: Identifies geographic metadata to cross-reference incident locations.
-- **PDF Forensics**: Analyzes Producer and Creator tags, modification dates, and digital signature tampering.
+### 3. Metadata Context
+- **Images**: Records available EXIF camera, software, timestamp, dimensions, and GPS fields. Absence or editable tags are not proof of manipulation.
+- **PDFs**: Reads a limited sample of Creator, Producer, and date tags; it does not validate PDF signatures or document contents.
+- **Video**: Records dimensions, frame rate, and duration. Low frame rate alone does not imply AI generation.
+- **Scoring**: These unverified observations contribute zero to the current single-model screening score.
 
 ### 4. Sequential Zero-OOM Batch Pipeline
 Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes with Exit 137 OOM errors. FraudSight AI prevents this via:
@@ -122,9 +108,9 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/` | Service status, active version, guardrail configs | `200 OK` |
 | `GET` | `/api/health` | Health check & queue worker status (used for keepalives) | `200 OK` |
-| `GET` | `/api/ready` | Confirms model credentials are configured for analysis | `200 OK` / `503` |
+| `GET` | `/api/ready` | Confirms the OpenRouter key is present and accepted | `200 OK` / `503` |
 | `POST` | `/api/analyze` | Submit single media file for asynchronous analysis | `200 OK` (returns `job_id`) |
-| `GET` | `/api/jobs/{job_id}` | Poll single job progress, stage, jury votes, and risk score | `200 OK` / `404` |
+| `GET` | `/api/jobs/{job_id}` | Poll job progress, model attribution, and provisional score | `200 OK` / `404` |
 | `POST` | `/api/batch/analyze` | Submit multiple files for sequential zero-OOM evaluation | `200 OK` (returns `batch_id`) |
 | `GET` | `/api/batch/{batch_id}`| Poll batch progress, item status, and aggregate summary | `200 OK` / `404` |
 | `POST` | `/api/analyze-url` | Trigger analysis on remote media URL (Cloudflare R2 / S3) | `200 OK` |
@@ -135,11 +121,11 @@ Batch processing on free-tier containers (e.g., Render 512MB RAM) often crashes 
 | `GET` | `/api/analytics/export-csv` | Stream full evaluation history as CSV report | `200 OK` |
 | `POST` | `/analyze_media` | Synchronous evaluation endpoint for legacy compatibility | `200 OK` |
 
-Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before creating a job when required model credentials are absent. A batch whose every item fails has status `failed`; partial batches retain successful results and report failed items individually. Readiness checks configuration only and do not call external model providers.
+Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before creating a job when required model credentials are absent, or `503 MODEL_PROVIDERS_UNAVAILABLE` when a provider rejects or cannot verify its key. A batch whose every item fails has status `failed`; partial batches retain successful results and report failed items individually. `/api/health` reports liveness and whether keys are configured; `/api/ready` checks provider authentication through non-billable account endpoints and caches the outcome for one minute. It does not guarantee model availability or accuracy.
 
 ---
 
-## 100% Free-Tier Deployment Guide
+## Deployment Guide
 
 ### Layer 1: Next.js Frontend on Vercel
 1. Import `adimalkar/multimodal-fraud-detector` into [Vercel](https://vercel.com).
@@ -153,7 +139,6 @@ Analysis submission endpoints return `503 MODEL_PROVIDERS_UNCONFIGURED` before c
 2. Select **Docker** (Blank) and Free Hardware (2 vCPU, 16GB RAM).
 3. Under **Settings → Variables and Secrets**, add:
    - `OPENROUTER_API_KEY`: Your OpenRouter API key.
-   - `FEATHERLESS_API_KEY`: Your Featherless API key. Both provider keys are required by the current analysis pipeline.
    - `DATABASE_URL`: Your Supabase/Neon PostgreSQL connection string (optional).
 4. Push this repository to your Space:
    ```bash
@@ -198,7 +183,7 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Edit .env and supply both OPENROUTER_API_KEY and FEATHERLESS_API_KEY
+# Edit .env and supply OPENROUTER_API_KEY
 ```
 
 ### 3. Running the Stack Locally

@@ -7,6 +7,12 @@ from backend.app import app, jobs
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr("backend.app.missing_model_credentials", lambda: [])
+    monkeypatch.setattr(
+        "backend.app.verify_provider_authentication",
+        lambda: {
+            "openrouter": {"status": "authenticated", "http_status": 200},
+        },
+    )
     return TestClient(app)
 
 def test_health_check(client):

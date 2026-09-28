@@ -138,9 +138,9 @@ const Features = () => {
     return (
         <section className="py-20 md:py-24">
             <div className="container">
-                <h2 className="text-5xl md:text-6xl font-medium text-center tracking-tighter">Expose fraud with precision.</h2>
+                <h2 className="text-5xl md:text-6xl font-medium text-center tracking-tighter">Inspect visual evidence.</h2>
                 <p className="text-white/70 text-lg md:text-xl max-w-2xl mx-auto tracking-tight text-center mt-5">
-                    From deepfakes to document forgery, our multi-agent architecture uses state-of-the-art vision models and critic agents to detect microscopic anomalies.
+                    Screen images, documents, and sampled video frames for visible clues. Every result needs human review.
                 </p>
                 <div className="flex flex-col lg:flex-row gap-3 mt-10">
                     {tabs.map((tab, index) => (

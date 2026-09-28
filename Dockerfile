@@ -1,4 +1,4 @@
-# Multi-Agent Forensics Engine - Hugging Face Spaces & Production Container
+# Visual screening API container
 # Free Tier Specs: 16 GB RAM + 2 vCPU on Hugging Face Docker Spaces
 
 FROM python:3.10-slim

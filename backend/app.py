@@ -37,6 +37,11 @@ except ImportError:
     from qwen_agent import analyze_media, analyze_video, missing_model_credentials
 
 try:
+    from backend.provider_readiness import verify_provider_authentication
+except ImportError:
+    from provider_readiness import verify_provider_authentication
+
+try:
     from backend.storage import (
         generate_presigned_upload_url,
         is_storage_configured,
@@ -72,10 +77,13 @@ except ImportError:
     from metadata_extractor import extract_metadata
 
 risk_scorer_engine = MultimodalRiskScorer()
+single_model_risk_scorer = MultimodalRiskScorer(
+    text_weight=0.0, visual_weight=1.0, metadata_weight=0.0
+)
 
 app = FastAPI(
     title="FraudSight AI Backend API",
-    description="Multi-agent multimodal insurance fraud detection API with asynchronous job queuing and object storage support",
+    description="Visual evidence screening API with asynchronous jobs and object storage support",
     version="2.2.0"
 )
 
@@ -106,6 +114,16 @@ def ensure_analysis_available():
                 "code": "MODEL_PROVIDERS_UNCONFIGURED",
                 "message": "Analysis is unavailable until model provider credentials are configured.",
                 "missing_credentials": missing,
+            },
+        )
+    providers = verify_provider_authentication()
+    if any(provider["status"] != "authenticated" for provider in providers.values()):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "MODEL_PROVIDERS_UNAVAILABLE",
+                "message": "Analysis is unavailable because model providers could not be authenticated.",
+                "providers": providers,
             },
         )
 
@@ -140,7 +158,7 @@ def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
         return "Image", content_type or "image/jpeg"
 
 def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
-    """Runs multi-agent vision & critic forensics and formats result structure with unified risk scoring."""
+    """Run visual screening and format its provisional result with metadata signals."""
     start_time = time.time()
 
     # 1. Forensic metadata extraction
@@ -149,7 +167,7 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     metadata_flags = meta_info.get("flags", [])
     flags_count = meta_info.get("flags_count", 0)
 
-    # 2. Vision agent & LLM critic jury
+    # 2. One bounded vision request
     if media_type == "Video":
         raw_result = analyze_video(file_path)
     else:
@@ -157,7 +175,7 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
 
     elapsed = round(time.time() - start_time, 2)
 
-    # 3. Normalize voting breakdown
+    # 3. Keep model attribution in the existing response shape
     vote_breakdown = raw_result.get("vote_breakdown", {})
     votes_list = []
     fake_votes_conf = []
@@ -183,7 +201,8 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     if classification.lower() not in {"real", "fake"}:
         raise RuntimeError("Analysis did not return a valid Real or Fake verdict.")
 
-    # 4. Multimodal risk heuristic calculation
+    # 4. Compute a provisional visual score, never an automatic decision.
+    # Unverified metadata observations have no evidence-backed weight.
     if classification.lower() == "fake":
         visual_score = confidence_score
     elif classification.lower() == "real":
@@ -191,19 +210,25 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     else:
         visual_score = 0.5
 
-    if fake_votes_conf:
+    single_visual_model = raw_result.get("consensus", "").endswith("single_model")
+    if single_visual_model:
+        text_score = 0.0
+    elif fake_votes_conf:
         text_score = sum(fake_votes_conf) / len(fake_votes_conf)
     elif real_votes_conf:
         text_score = max(0.0, 1.0 - (sum(real_votes_conf) / len(real_votes_conf)))
     else:
         text_score = visual_score
 
-    risk_assessment = risk_scorer_engine.calculate_risk(
+    scorer = single_model_risk_scorer if single_visual_model else risk_scorer_engine
+    risk_assessment = scorer.calculate_risk(
         text_score=text_score,
         visual_score=visual_score,
         metadata_flags=flags_count,
-        synergy_boost_enabled=True
+        synergy_boost_enabled=not single_visual_model
     )
+    if single_visual_model:
+        risk_assessment["recommended_action"] = "MANUAL_REVIEW"
 
     return {
         "classification": classification,
@@ -215,6 +240,9 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
         "vote_breakdown": vote_breakdown,
         "consensus": raw_result.get("consensus", "majority"),
         "calibration": raw_result.get("calibration", ""),
+        "risk_calibration": "Visual-only screening score; not a calibrated fraud probability. Metadata is context only.",
+        "model_usage": raw_result.get("model_usage", {}),
+        "needs_review": raw_result.get("needs_review", single_visual_model),
         "elapsed_seconds": elapsed,
         "media_type": media_type,
         "multimodal_risk": {
@@ -233,15 +261,15 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
     """Synchronous worker function executed in background thread."""
     try:
         jobs[job_id]["status"] = "processing"
-        jobs[job_id]["stage"] = "Multi-agent vision & critic forensics in progress..."
+        jobs[job_id]["stage"] = "Preparing visual evidence for screening..."
         jobs[job_id]["progress"] = 30
         jobs[job_id]["updated_at"] = time.time()
 
         if media_type == "Video":
-            jobs[job_id]["stage"] = "Extracting video keyframes and analyzing frame sequences..."
+            jobs[job_id]["stage"] = "Sampling video frames for visual screening..."
             jobs[job_id]["progress"] = 45
         else:
-            jobs[job_id]["stage"] = "Vision agent extracting micro-anomalies and critic jury evaluating..."
+            jobs[job_id]["stage"] = "Visual screening in progress..."
             jobs[job_id]["progress"] = 50
 
         formatted_result = execute_agent_analysis(file_path, media_type, content_type)
@@ -443,7 +471,7 @@ def health_check():
     return {
         "status": "healthy",
         "service": "FraudSight AI API",
-        "analysis_ready": not missing_model_credentials(),
+        "providers_configured": not missing_model_credentials(),
         "storage_configured": is_storage_configured(),
         "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]]),
         "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]])
@@ -452,7 +480,7 @@ def health_check():
 
 @app.get("/api/ready")
 def readiness_check():
-    """Report whether the configured model pipeline can accept analysis work."""
+    """Check provider authentication before accepting analysis work."""
     ensure_analysis_available()
     return {"status": "ready", "analysis_ready": True}
 
