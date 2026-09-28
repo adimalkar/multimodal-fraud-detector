@@ -27,3 +27,5 @@ multimodal-fraud-detector-master/
 multimodal-fraud-detector/
 new_evaluation_results.txt
 output.txt
+evaluation/data/
+evaluation/runs/
