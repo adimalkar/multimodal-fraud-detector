@@ -29,3 +29,5 @@ new_evaluation_results.txt
 output.txt
 evaluation/data/
 evaluation/runs/
+temp_uploads/
+database/durable_jobs.db

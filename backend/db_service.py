@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("DURABLE_DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -22,7 +22,8 @@ def ensure_columns(conn):
     new_cols = [
         ("risk_score", "REAL"),
         ("severity_tier", "TEXT"),
-        ("recommended_action", "TEXT")
+        ("recommended_action", "TEXT"),
+        ("job_id", "TEXT"),
     ]
     for col, col_type in new_cols:
         try:
@@ -34,6 +35,15 @@ def ensure_columns(conn):
                 conn.execute(f"ALTER TABLE evidence ADD COLUMN {col} {col_type}")
         except Exception:
             pass
+    try:
+        if is_postgres() and hasattr(conn, "cursor_factory"):
+            with conn.cursor() as cur:
+                cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS evidence_job_id_unique ON evidence(job_id) WHERE job_id IS NOT NULL")
+        else:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS evidence_job_id_unique ON evidence(job_id) WHERE job_id IS NOT NULL")
+        conn.commit()
+    except Exception:
+        pass
 
 def get_connection():
     """Returns a database connection (PostgreSQL if DATABASE_URL is set, else SQLite)."""
@@ -67,6 +77,8 @@ def get_connection():
             ensure_columns(conn)
             return conn
         except Exception as e:
+            if os.environ.get("DURABLE_JOBS_ENABLED") == "1":
+                raise RuntimeError("PostgreSQL is unavailable; analytics cannot fall back to SQLite") from e
             print(f"PostgreSQL connection warning ({e}), falling back to SQLite: {DB_PATH}")
 
     # Fallback to local SQLite
@@ -109,7 +121,8 @@ def save_evaluation(
     file_path: Optional[str] = None,
     risk_score: Optional[float] = None,
     severity_tier: Optional[str] = None,
-    recommended_action: Optional[str] = None
+    recommended_action: Optional[str] = None,
+    job_id: Optional[str] = None,
 ) -> int:
     """Save a completed visual screening record to the database."""
     conn = get_connection()
@@ -123,8 +136,8 @@ def save_evaluation(
             filename, file_path, media_type, fraud_category, ground_truth,
             ai_prediction, confidence, vision_findings, final_reasoning,
             is_processed, processing_time, processed_at,
-            risk_score, severity_tier, recommended_action
-        ) VALUES ({','.join([placeholder] * 15)})
+            risk_score, severity_tier, recommended_action, job_id
+        ) VALUES ({','.join([placeholder] * 16)}) ON CONFLICT DO NOTHING
     """
     actual_file_path = file_path or f"{filename}_{uuid.uuid4().hex[:8]}"
     params = (
@@ -137,26 +150,49 @@ def save_evaluation(
         float(confidence),
         vision_findings,
         final_reasoning,
-        1,  # is_processed
+        True,  # SQLite stores this as 1; PostgreSQL requires a boolean.
         float(processing_time),
         timestamp,
         float(risk_score) if risk_score is not None else None,
         severity_tier,
-        recommended_action
+        recommended_action,
+        job_id,
     )
 
     if is_postgres() and hasattr(conn, "cursor_factory"):
         with conn.cursor() as cursor:
             cursor.execute(query + " RETURNING id", params)
-            record_id = cursor.fetchone()[0]
+            row = cursor.fetchone()
+            if row:
+                record_id = row[0]
+            elif job_id:
+                cursor.execute("SELECT id FROM evidence WHERE job_id=%s", (job_id,))
+                record_id = cursor.fetchone()[0]
+            else:
+                raise RuntimeError("Evaluation insert conflicted without job ID")
         conn.commit()
     else:
         with conn:
             cursor = conn.execute(query, params)
-            record_id = cursor.lastrowid
+            if job_id:
+                record_id = conn.execute("SELECT id FROM evidence WHERE job_id=?", (job_id,)).fetchone()[0]
+            else:
+                record_id = cursor.lastrowid
 
     conn.close()
     return record_id
+
+
+def delete_evaluation_by_job_id(job_id: str) -> None:
+    """Remove the derived analytics projection when its private source job is deleted."""
+    conn = get_connection()
+    try:
+        placeholder = "%s" if is_postgres() and hasattr(conn, "cursor_factory") else "?"
+        cursor = conn.cursor()
+        cursor.execute(f"DELETE FROM evidence WHERE job_id={placeholder}", (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_analytics_summary() -> Dict[str, Any]:
     """Calculates high-level forensic metrics for the analytics dashboard."""

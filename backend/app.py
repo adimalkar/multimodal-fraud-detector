@@ -6,7 +6,14 @@ import shutil
 import uuid
 import time
 import asyncio
+import hashlib
+import json
+from functools import lru_cache
 from typing import Dict, Any, Optional, List
+
+from backend.durable_auth import configured_tokens, require_tenant
+from backend.durable_jobs import IdempotencyConflict, JobBusy, QuotaExceeded
+from backend.durable_worker import build_components, delete_private_job, run_once
 
 try:
     from backend.guardrails import (
@@ -87,11 +94,15 @@ app = FastAPI(
     version="2.2.0"
 )
 
-# Enable CORS for Next.js frontend (Vercel, localhost, and custom domains)
+# Durable mode only accepts explicitly configured frontend origins.
+cors_origins = (
+    [origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+    if os.getenv("DURABLE_JOBS_ENABLED", "0") == "1" else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials=cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -102,6 +113,142 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 # In-memory job and batch stores
 jobs: Dict[str, Dict[str, Any]] = {}
 batches: Dict[str, Dict[str, Any]] = {}
+
+DURABLE_JOBS_ENABLED = os.getenv("DURABLE_JOBS_ENABLED", "0") == "1"
+DURABLE_EXECUTION_MODE = os.getenv("DURABLE_EXECUTION_MODE", "external")
+
+
+@lru_cache(maxsize=1)
+def durable_components():
+    try:
+        return build_components()
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Durable analysis storage is unavailable") from error
+
+
+def durable_quota():
+    return {
+        "max_daily_jobs": int(os.getenv("DURABLE_DAILY_JOBS_PER_TENANT", "20")),
+        "max_daily_reserved_usd": float(os.getenv("DURABLE_DAILY_RESERVED_USD", "0.50")),
+        "reserve_per_job_usd": float(os.getenv("DURABLE_RESERVE_PER_JOB_USD", "0.01")),
+    }
+
+
+def durable_idempotency_key(request: Request):
+    key = request.headers.get("idempotency-key")
+    if key and (len(key) > 128 or not key.strip()):
+        raise HTTPException(status_code=400, detail="Invalid Idempotency-Key")
+    return key
+
+
+def durable_enqueue(background_tasks, request, owner_id, uploads):
+    store, artifacts = durable_components()
+    specs = []
+    keys = []
+    try:
+        if DURABLE_EXECUTION_MODE == "external" and not store.worker_recent():
+            raise HTTPException(status_code=503, detail="Analysis worker is unavailable")
+        for file in uploads:
+            media_type, content_type = detect_media_type(file.filename, file.content_type or "")
+            key, digest, size = artifacts.put_upload(file.file, file.filename)
+            keys.append(key)
+            specs.append({
+                "filename": file.filename,
+                "media_type": media_type,
+                "content_type": content_type,
+                "artifact_key": key,
+                "artifact_sha256": digest,
+                "size": size,
+            })
+        if sum(spec["size"] for spec in specs) > int(os.getenv("DURABLE_MAX_BATCH_BYTES", "104857600")):
+            raise HTTPException(status_code=413, detail="Batch exceeds total size limit")
+        fingerprint = hashlib.sha256(json.dumps(
+            [(spec["filename"], spec["artifact_sha256"]) for spec in specs],
+            separators=(",", ":"),
+        ).encode()).hexdigest()
+        primary, created = store.create(
+            owner_id, specs, idempotency_key=durable_idempotency_key(request),
+            request_fingerprint=fingerprint, **durable_quota(),
+        )
+    except HTTPException:
+        raise
+    except QuotaExceeded as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
+    except IdempotencyConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Durable analysis storage is unavailable") from error
+    finally:
+        # Stored objects for a duplicate/failed submission are not owned by a job.
+        if "created" not in locals() or not created:
+            for key in keys:
+                try:
+                    artifacts.delete(key)
+                except Exception:
+                    pass
+    if created and DURABLE_EXECUTION_MODE == "inline":
+        background_tasks.add_task(durable_process_pending, len(specs))
+    return primary
+
+
+def durable_process_pending(max_items: int):
+    store, artifacts = durable_components()
+    for _ in range(max_items):
+        if not run_once(store, artifacts):
+            break
+
+
+def durable_item_response(job):
+    return {
+        "job_id": job["id"], "status": job["status"],
+        "progress": job["progress"], "stage": job["stage"],
+        "elapsed_seconds": round(time.time() - job["created_at"], 1),
+        "result": json.loads(job["result_json"]) if job["result_json"] else None,
+        "error": job["error_message"],
+        "error_code": job["error_code"],
+        "pipeline_version": job["pipeline_version"],
+        "artifact_sha256": job["artifact_sha256"],
+    }
+
+
+def durable_batch_response(parent, children):
+    completed = [row for row in children if row["status"] == "completed"]
+    failed = [row for row in children if row["status"] == "failed"]
+    done = len(completed) + len(failed)
+    total = len(children)
+    status = (
+        "failed" if done == total and not completed else
+        "completed" if done == total else
+        "processing" if any(row["status"] == "processing" for row in children) or done else
+        "queued"
+    )
+    results = [json.loads(row["result_json"]) for row in completed]
+    confidences = [float(result.get("confidence", 0)) for result in results]
+    summary = {
+        "total": total, "processed": len(completed),
+        "fake_count": sum(result.get("classification", "").lower() == "fake" for result in results),
+        "real_count": sum(result.get("classification", "").lower() == "real" for result in results),
+        "error_count": len(failed),
+        "avg_confidence": round(sum(confidences) / len(confidences), 3) if confidences else 0.0,
+    }
+    return {
+        "batch_id": parent["id"], "status": status,
+        "stage": "Batch analysis complete" if done == total else "Batch analysis in progress",
+        "total_items": total, "completed_items": done,
+        "progress": int(done / total * 100) if total else 0,
+        "elapsed_seconds": round(time.time() - parent["created_at"], 1),
+        "summary": summary,
+        "error": "All batch items failed analysis" if status == "failed" else None,
+        "items": [
+            {
+                "item_id": row["item_index"], "filename": row["filename"],
+                "media_type": row["media_type"], "status": row["status"],
+                "result": json.loads(row["result_json"]) if row["result_json"] else None,
+                "error": row["error_message"],
+            }
+            for row in children
+        ],
+    }
 
 
 def ensure_analysis_available():
@@ -148,14 +295,19 @@ def cleanup_old_jobs():
 
 def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
     ext = filename.split(".")[-1].lower() if "." in filename else ""
-    if ext == "pdf" or content_type == "application/pdf":
+    if ext == "pdf":
         return "Document", "application/pdf"
-    elif ext in ["mp4", "avi", "mov", "mkv", "webm"] or "video" in content_type:
-        return "Video", content_type or "video/mp4"
-    elif ext in ["png"]:
+    if ext in {"mp4", "avi", "mov", "mkv", "webm"}:
+        mime = {
+            "mp4": "video/mp4", "avi": "video/x-msvideo", "mov": "video/quicktime",
+            "mkv": "video/x-matroska", "webm": "video/webm",
+        }
+        return "Video", mime[ext]
+    if ext == "png":
         return "Image", "image/png"
-    else:
-        return "Image", content_type or "image/jpeg"
+    if ext == "webp":
+        return "Image", "image/webp"
+    return "Image", "image/jpeg"
 
 def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
     """Run visual screening and format its provisional result with metadata signals."""
@@ -467,6 +619,22 @@ def root():
 @app.get("/health")
 @app.get("/api/health")
 def health_check():
+    if DURABLE_JOBS_ENABLED:
+        store, _ = durable_components()
+        try:
+            counts = store.active_counts()
+            worker_available = store.worker_recent() if DURABLE_EXECUTION_MODE == "external" else True
+        except Exception as error:
+            raise HTTPException(status_code=503, detail="Durable job database is unavailable") from error
+        return {
+            "status": "healthy", "service": "FraudSight AI API",
+            "providers_configured": not missing_model_credentials(),
+            "storage_configured": True,
+            **counts,
+            "job_backend": "durable",
+            "auth_configured": configured_tokens() is not None,
+            "worker_available": worker_available,
+        }
     cleanup_old_jobs()
     return {
         "status": "healthy",
@@ -482,6 +650,17 @@ def health_check():
 def readiness_check():
     """Check provider authentication before accepting analysis work."""
     ensure_analysis_available()
+    if DURABLE_JOBS_ENABLED:
+        store, _ = durable_components()
+        if configured_tokens() is None:
+            raise HTTPException(status_code=503, detail="Analysis authentication is not configured")
+        if DURABLE_EXECUTION_MODE == "external":
+            try:
+                worker_available = store.worker_recent()
+            except Exception as error:
+                raise HTTPException(status_code=503, detail="Durable job database is unavailable") from error
+            if not worker_available:
+                raise HTTPException(status_code=503, detail="Analysis worker is unavailable")
     return {"status": "ready", "analysis_ready": True}
 
 @app.post("/api/storage/presigned-url")
@@ -490,6 +669,9 @@ def request_presigned_url(req: PresignedUrlRequest, request: Request):
     Generates a pre-signed URL for direct browser uploads to Cloudflare R2 / S3.
     Bypasses API server RAM completely.
     """
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=410, detail="Use authenticated direct upload")
     enforce_rate_limit(request)
     validate_file_extension(req.filename)
     return generate_presigned_upload_url(req.filename, req.content_type)
@@ -505,6 +687,20 @@ def storage_status():
 @app.post("/api/analyze")
 async def create_analysis_job(background_tasks: BackgroundTasks, request: Request, file: UploadFile = File(...)):
     """Accepts direct multipart file upload and enqueues background evaluation."""
+    if DURABLE_JOBS_ENABLED:
+        owner_id = require_tenant(request)
+        enforce_rate_limit(request)
+        if not file or not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        validate_file_extension(file.filename)
+        validate_file_size(file)
+        await asyncio.to_thread(ensure_analysis_available)
+        job = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, [file])
+        return {
+            "job_id": job["id"], "status": job["status"],
+            "media_type": job["media_type"], "filename": job["filename"],
+            "message": "Analysis queued. Poll /api/jobs/{job_id} for progress.",
+        }
     enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -556,6 +752,9 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
     Initiates analysis on a media file stored in Cloudflare R2 / S3 / Supabase.
     Buffers the file in chunks without crashing 512MB RAM containers.
     """
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=410, detail="Arbitrary URL ingestion is disabled; use direct upload")
     enforce_rate_limit(request)
     if not req.media_url:
         raise HTTPException(status_code=400, detail="media_url is required")
@@ -593,7 +792,14 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
     }
 
 @app.get("/api/jobs/{job_id}")
-def get_job_status(job_id: str):
+def get_job_status(job_id: str, request: Request):
+    if DURABLE_JOBS_ENABLED:
+        owner_id = require_tenant(request)
+        store, _ = durable_components()
+        job = store.get(job_id, owner_id)
+        if not job or job["kind"] != "item":
+            raise HTTPException(status_code=404, detail="Job not found")
+        return durable_item_response(job)
     cleanup_old_jobs()
     job = jobs.get(job_id)
     if not job:
@@ -612,9 +818,44 @@ def get_job_status(job_id: str):
         "error": job.get("error")
     }
 
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str, request: Request):
+    if not DURABLE_JOBS_ENABLED:
+        raise HTTPException(status_code=404, detail="Durable job deletion is unavailable")
+    owner_id = require_tenant(request)
+    store, artifacts = durable_components()
+    try:
+        deleted = delete_private_job(store, artifacts, owner_id, job_id, "item")
+    except JobBusy as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Evidence deletion is incomplete; retry later") from error
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"deleted": True, "job_id": job_id}
+
 @app.post("/api/batch/analyze")
 async def create_batch_job(background_tasks: BackgroundTasks, request: Request, files: List[UploadFile] = File(...)):
     """Accepts multiple evidence files and processes them sequentially in background without OOM."""
+    if DURABLE_JOBS_ENABLED:
+        owner_id = require_tenant(request)
+        enforce_rate_limit(request)
+        validate_batch_size(files)
+        if any(not file.filename for file in files):
+            raise HTTPException(status_code=400, detail="All batch files need filenames")
+        for file in files:
+            validate_file_extension(file.filename)
+            validate_file_size(file)
+        await asyncio.to_thread(ensure_analysis_available)
+        if len(files) == 1:
+            raise HTTPException(status_code=400, detail="Use /api/analyze for one file")
+        batch = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, files)
+        return {
+            "batch_id": batch["id"], "status": batch["status"],
+            "total_files": len(files),
+            "message": "Batch submission accepted. Poll /api/batch/{batch_id} for progress.",
+        }
     enforce_rate_limit(request)
     validate_batch_size(files)
 
@@ -691,7 +932,14 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
     }
 
 @app.get("/api/batch/{batch_id}")
-def get_batch_status(batch_id: str):
+def get_batch_status(batch_id: str, request: Request):
+    if DURABLE_JOBS_ENABLED:
+        owner_id = require_tenant(request)
+        store, _ = durable_components()
+        parent = store.get(batch_id, owner_id)
+        if not parent or parent["kind"] != "batch":
+            raise HTTPException(status_code=404, detail="Batch not found")
+        return durable_batch_response(parent, store.children(batch_id, owner_id))
     cleanup_old_jobs()
     batch = batches.get(batch_id)
     if not batch:
@@ -713,9 +961,29 @@ def get_batch_status(batch_id: str):
         "items": batch["items"]
     }
 
+
+@app.delete("/api/batch/{batch_id}")
+def delete_batch(batch_id: str, request: Request):
+    if not DURABLE_JOBS_ENABLED:
+        raise HTTPException(status_code=404, detail="Durable batch deletion is unavailable")
+    owner_id = require_tenant(request)
+    store, artifacts = durable_components()
+    try:
+        deleted = delete_private_job(store, artifacts, owner_id, batch_id, "batch")
+    except JobBusy as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Evidence deletion is incomplete; retry later") from error
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return {"deleted": True, "batch_id": batch_id}
+
 # Backward compatible synchronous endpoint
 @app.post("/analyze_media")
 async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=410, detail="Use the asynchronous analysis API")
     enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -746,12 +1014,18 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
 
 # Analytics & Reporting endpoints
 @app.get("/api/analytics/stats")
-def get_analytics_stats():
+def get_analytics_stats(request: Request):
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
     cleanup_old_jobs()
     return get_analytics_summary()
 
 @app.get("/api/analytics/evaluations")
-def get_evaluations(limit: int = 50, offset: int = 0):
+def get_evaluations(request: Request, limit: int = 50, offset: int = 0):
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
     cleanup_old_jobs()
     return {
         "evaluations": get_evaluations_list(limit=limit, offset=offset),
@@ -760,7 +1034,10 @@ def get_evaluations(limit: int = 50, offset: int = 0):
     }
 
 @app.get("/api/analytics/export-csv")
-def download_evaluations_csv():
+def download_evaluations_csv(request: Request):
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+        raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
     csv_data = export_evaluations_csv()
     return Response(
         content=csv_data,

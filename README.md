@@ -75,6 +75,7 @@ The existing response includes a provisional 0–1 visual screening score. Metad
 
 See [the model evaluation plan](docs/MODEL_EVALUATION_PLAN.md) for the labeled benchmark and cost gates needed before choosing a stronger model or adding a second paid call.
 See [the detector architecture review](docs/DETECTOR_ARCHITECTURE_REVIEW.md) for product and open-source comparisons, the original critic-jury audit, and modality-specific next steps.
+See [the multimodal implementation plan](docs/MULTIMODAL_DETECTION_IMPLEMENTATION_PLAN.md) for the phase sequence. The [durable backend rollout guide](docs/PHASE1_DURABLE_BACKEND.md) describes the opt-in PostgreSQL/R2 worker path; it is not enabled on the current Render site. The default API path still uses process-memory jobs.
 
 ### 3. Metadata Context
 - **Images**: Records available EXIF camera, software, timestamp, dimensions, and GPS fields. Absence or editable tags are not proof of manipulation.
