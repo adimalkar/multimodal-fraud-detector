@@ -19,7 +19,7 @@ pinned: false
 
 **FraudSight AI** is an in-progress visual evidence screening application for images, PDFs, and videos. The backend samples bounded visual inputs, sends one request to an OpenRouter vision model, and combines its provisional result with extracted metadata. A model verdict is not proof of AI generation or insurance fraud; every result requires human review.
 
-The opt-in durable backend also has a zero-model-call image provenance path. It verifies embedded C2PA against stored original bytes and explicitly abstains on AI-image classification; see [Phase 2a image evidence](docs/PHASE2_IMAGE_EVIDENCE.md). This path is not active on the public site.
+The opt-in durable backend has zero-model-call image provenance and PDF structure paths. The new PDF signature path adds offline integrity and revision observations. Each path explicitly abstains on AI-generation and fraud classification; see [image evidence](docs/PHASE2_IMAGE_EVIDENCE.md), [PDF structure evidence](docs/PHASE3_PDF_EVIDENCE.md), and [PDF signature evidence](docs/PHASE3_PDF_SIGNATURE_EVIDENCE.md). These paths are not automatically active on the public site.
 
 The repository includes a Next.js frontend, a FastAPI backend, optional object storage, and PostgreSQL or SQLite persistence. OpenRouter calls are billed even when the hosting tier is free.
 
@@ -29,38 +29,29 @@ The repository includes a Next.js frontend, a FastAPI backend, optional object s
 
 ```mermaid
 flowchart TD
-    subgraph Client["Client Tier"]
-        UI["Next.js 14 Web Application\n(Hosted on Vercel CDN - 0s Cold Start)"]
-    end
+    UI[Next.js client] --> API[FastAPI intake and access controls]
+    API --> Original[(Private original and SHA-256)]
+    API --> Jobs[(Versioned durable jobs)]
+    Jobs --> Worker[Bounded worker and format router]
 
-    subgraph Storage["Zero-Egress Object Storage"]
-        R2["Cloudflare R2 / S3\n(Direct Presigned Upload)"]
-    end
+    Worker -->|default screening path| VLM[Single capped vision call and metadata context]
+    Worker -->|image evidence flag| C2PA[Original-byte C2PA observations]
+    Worker -->|PDF evidence flag| PDF1[Bounded PDF structure observations]
+    PDF1 -->|signature flag, v2| PDF2[Offline signature and revision observations]
 
-    subgraph API["AI Engine & API (FastAPI)"]
-        GW["Rate Limiter & Guardrails\n(Sliding Window, File Size, Mime Check)"]
-        Router["Job Queues & State Machine\n(POST /api/analyze, POST /api/batch/analyze)"]
-        Meta["Metadata Context\n(EXIF, Software, File Properties)"]
-        Vision["OpenRouter Vision Model\n(One bounded request per item)"]
-        Scorer["Provisional Risk Heuristic\n(Human review required)"]
-    end
+    Worker -. planned and gated .-> Image[Pixel and local-edit evaluation]
+    Worker -. planned and gated .-> Video[Temporal video evidence]
+    Worker -. planned and gated .-> Fields[PDF OCR and field checks]
 
-    subgraph Persistence["Audit Ledger & Analytics"]
-        DB[("Supabase / Neon PostgreSQL\n(or Local SQLite Fallback)")]
-        Export["CSV Audit Export & Stats API"]
-    end
-
-    UI -->|"1. Request Presigned URL"| GW
-    GW -->|"2. Return Upload URL"| UI
-    UI -->|"3. Direct Media Upload"| R2
-    UI -->|"4. Dispatch Job"| Router
-    Router --> Meta
-    Meta --> Vision
-    Vision --> Scorer
-    Scorer --> DB
-    DB --> Export
-    UI -->|"5. Poll /api/jobs/{id} or /api/batch/{id}"| Router
+    VLM --> Results[Versioned task results and coverage]
+    C2PA --> Results
+    PDF1 --> Results
+    PDF2 --> Results
+    Results --> Review[Manual review]
+    Review --> UI
 ```
+
+Solid branches are implemented paths; the durable evidence branches require their rollout flags and worker deployment. Dotted branches are planned and require independent labels, rights review, and modality-specific evaluation before a product verdict. The previous judge–critic jury is retired; [the implementation plan](docs/MULTIMODAL_DETECTION_IMPLEMENTATION_PLAN.md) defines the release gates. [technical_report.md](technical_report.md) records the original hackathon design and does not describe this rollout.
 
 ---
 
@@ -81,7 +72,7 @@ See [the multimodal implementation plan](docs/MULTIMODAL_DETECTION_IMPLEMENTATIO
 
 ### 3. Metadata Context
 - **Images**: Records available EXIF camera, software, timestamp, dimensions, and GPS fields. Absence or editable tags are not proof of manipulation.
-- **PDFs**: Reads a limited sample of Creator, Producer, and date tags; it does not validate PDF signatures or document contents.
+- **PDFs on the default screening path**: Reads a limited sample of Creator, Producer, and date tags; this path does not validate PDF signatures or document contents. The opt-in PDF v2 path checks signatures separately.
 - **Video**: Records dimensions, frame rate, and duration. Low frame rate alone does not imply AI generation.
 - **Scoring**: These unverified observations contribute zero to the current single-model screening score.
 
