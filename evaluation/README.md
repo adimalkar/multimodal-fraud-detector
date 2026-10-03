@@ -55,3 +55,5 @@ Use `--compare other-run.jsonl` to score a second model on the same item IDs and
 ## Phase 0 completion evidence
 
 The harness and leakage checks are ready, but the phase's accuracy gate remains open until there is a rights-cleared labeled pilot and provider-reported cost data. The dataset and target false-positive/coverage/latency/spend limits must be recorded before claiming an improved detector. Reuse the same item set, preprocessing and rights constraints for candidate comparisons.
+
+The offline Phase 2b pixel-detector candidate and its unresolved commercial-rights gate are documented in [`docs/PHASE2_IMAGE_CANDIDATE_EVALUATION.md`](../docs/PHASE2_IMAGE_CANDIDATE_EVALUATION.md).

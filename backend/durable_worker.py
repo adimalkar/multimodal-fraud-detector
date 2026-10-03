@@ -11,9 +11,15 @@ import uuid
 
 from backend.durable_jobs import SCHEMA_VERSION, DurableJobStore, QueueUnavailable
 from backend.evidence_artifacts import EvidenceArtifactStore
+from backend.image_evidence import IMAGE_PIPELINE_VERSION
+from backend.pdf_evidence import PDF_PIPELINE_VERSION, PDF_SIGNATURE_PIPELINE_VERSION
 
 LOGGER = logging.getLogger(__name__)
 WORKER_ID = uuid.uuid4().hex
+
+
+class UnsupportedPipelineVersion(ValueError):
+    pass
 
 
 def build_components():
@@ -58,41 +64,73 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
     heartbeat_thread.start()
     try:
         materialized = artifacts.materialize(job["artifact_key"], job["artifact_sha256"])
-        store.mark_billing_started(job["id"], token)
-        billed = True
-        # Import here to avoid an app/worker import cycle and reuse the current baseline.
-        from backend.app import execute_agent_analysis
+        if job["pipeline_version"] == IMAGE_PIPELINE_VERSION:
+            from backend.image_evidence import analyze_image_evidence
 
-        result = execute_agent_analysis(
-            str(materialized), job["media_type"], job["content_type"]
-        )
-        task = {
-            "Image": "synthetic_image_screening",
-            "Video": "sampled_video_screening",
-            "Document": "rendered_pdf_screening",
-        }[job["media_type"]]
-        result["pipeline_version"] = SCHEMA_VERSION
-        result["decision"] = "manual_review"
-        result["task_results"] = [{
-            "task": task,
-            "status": "inconclusive",
-            "model_observation": result.get("classification"),
-            "calibrated_score": None,
-            "limitations": "Single unvalidated vision model; specialist checks have not run.",
-        }]
+            result = analyze_image_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
+        elif job["pipeline_version"] == PDF_PIPELINE_VERSION:
+            from backend.pdf_evidence import analyze_pdf_evidence
+
+            result = analyze_pdf_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
+        elif job["pipeline_version"] == PDF_SIGNATURE_PIPELINE_VERSION:
+            from backend.pdf_evidence import analyze_pdf_signature_evidence
+
+            result = analyze_pdf_signature_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
+        elif job["pipeline_version"] == SCHEMA_VERSION:
+            store.mark_billing_started(job["id"], token)
+            billed = True
+            # Import here to avoid an app/worker import cycle and reuse the current baseline.
+            from backend.app import execute_agent_analysis
+
+            result = execute_agent_analysis(
+                str(materialized), job["media_type"], job["content_type"]
+            )
+            task = {
+                "Image": "synthetic_image_screening",
+                "Video": "sampled_video_screening",
+                "Document": "rendered_pdf_screening",
+            }[job["media_type"]]
+            result["pipeline_version"] = SCHEMA_VERSION
+            result["decision"] = "manual_review"
+            result["task_results"] = [{
+                "task": task,
+                "status": "inconclusive",
+                "model_observation": result.get("classification"),
+                "calibrated_score": None,
+                "limitations": "Single unvalidated vision model; specialist checks have not run.",
+            }]
+        else:
+            raise UnsupportedPipelineVersion("Unsupported queued pipeline version")
         # Keep the durable result as the only persisted analysis record. Writing a
         # second database here can race with lease loss or evidence deletion and
         # leave a private result behind after its job has disappeared.
         store.complete(job["id"], token, result)
     except Exception as error:  # noqa: BLE001 - per-job failure isolation
         retry = not billed and job["attempts"] < 2 and isinstance(error, OSError)
-        code = "ARTIFACT_UNAVAILABLE" if not billed else "ANALYSIS_FAILED"
+        code = (
+            "UNSUPPORTED_PIPELINE_VERSION" if isinstance(error, UnsupportedPipelineVersion)
+            else "ARTIFACT_UNAVAILABLE" if retry else "ANALYSIS_FAILED"
+        )
         message = (
             "Evidence storage temporarily unavailable" if retry
             else "Analysis failed; review before retrying"
         )
         try:
-            store.fail(job["id"], token, code, message, retry=retry)
+            store.fail(
+                job["id"], token, code, message, retry=retry,
+                retry_status=(
+                    "queued_image" if job["pipeline_version"] == IMAGE_PIPELINE_VERSION
+                    else "queued_pdf_v2" if job["pipeline_version"] == PDF_SIGNATURE_PIPELINE_VERSION
+                    else "queued_pdf" if job["pipeline_version"] == PDF_PIPELINE_VERSION
+                    else "queued"
+                ),
+            )
         except QueueUnavailable:
             # Expired lease recovery already placed the job into manual review.
             pass

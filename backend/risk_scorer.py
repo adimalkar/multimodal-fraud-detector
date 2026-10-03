@@ -54,12 +54,24 @@ class MultimodalRiskScorer:
             
         final_score = min(1.0, max(0.0, base_score))
         tier = self._determine_tier(final_score)
+
+        # Generate explainable factor breakdown
+        risk_factors = []
+        if text_score >= 0.5:
+            risk_factors.append(f"Elevated NLP fraud pattern ({round(text_score * 100, 1)}%)")
+        if visual_score >= 0.5:
+            risk_factors.append(f"Suspicious visual/deepfake artifacts detected ({round(visual_score * 100, 1)}%)")
+        if metadata_flags > 0:
+            risk_factors.append(f"Metadata anomalies flagged ({metadata_flags} flags)")
+        if synergy_applied:
+            risk_factors.append("Cross-modality compounding synergy multiplier applied (+15%)")
         
         return {
             "risk_score": round(final_score, 4),
             "severity_tier": tier,
             "recommended_action": self._determine_action(tier),
             "cross_modal_synergy_applied": synergy_applied,
+            "risk_factors": risk_factors,
             "breakdown": {
                 "text_contribution": round(text_score * self.weights['text'], 4),
                 "visual_contribution": round(visual_score * self.weights['visual'], 4),
