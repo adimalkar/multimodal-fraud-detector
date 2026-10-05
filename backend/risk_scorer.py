@@ -1,4 +1,5 @@
 import math
+import time
 from typing import Any
 
 
@@ -227,4 +228,85 @@ class MultimodalRiskScorer:
             "outlier_count": len(outliers),
             "outliers": outliers,
             "scored_records": scored,
+        }
+
+
+class TransactionVelocityTracker:
+    """
+    Tracks and penalizes high-frequency transactional bursts across entities (user/IP/device).
+    Applies sliding-window time-decayed velocity multipliers to base multimodal risk scores.
+    """
+
+    def __init__(
+        self,
+        window_seconds: float = 300.0,
+        burst_threshold: int = 3,
+        max_multiplier: float = 1.6,
+    ):
+        self.window_seconds = window_seconds
+        self.burst_threshold = burst_threshold
+        self.max_multiplier = max_multiplier
+        # entity_id -> list of timestamps
+        self.history: dict[str, list[float]] = {}
+
+    def record_event(
+        self, entity_id: str, timestamp: float | None = None
+    ) -> dict[str, Any]:
+        """
+        Records a transaction event for an entity, evicts stale timestamps,
+        and computes the instantaneous velocity multiplier.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        cutoff = now - self.window_seconds
+
+        if entity_id not in self.history:
+            self.history[entity_id] = []
+
+        # Evict timestamps outside the window
+        valid_ts = [t for t in self.history[entity_id] if t >= cutoff]
+        valid_ts.append(now)
+        self.history[entity_id] = valid_ts
+
+        window_count = len(valid_ts)
+        rate_per_min = round((window_count / (self.window_seconds / 60.0)), 2)
+
+        # Multiplier scales progressively once burst threshold is reached
+        if window_count > self.burst_threshold:
+            excess = window_count - self.burst_threshold
+            scale = min(1.0, excess / 5.0)
+            multiplier = 1.0 + scale * (self.max_multiplier - 1.0)
+        else:
+            multiplier = 1.0
+
+        burst_flagged = window_count >= self.burst_threshold
+
+        return {
+            "entity_id": entity_id,
+            "window_count": window_count,
+            "rate_per_minute": rate_per_min,
+            "velocity_multiplier": round(multiplier, 3),
+            "burst_flagged": burst_flagged,
+        }
+
+    def compute_adjusted_risk(
+        self,
+        base_risk_score: float,
+        entity_id: str,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Combines base multimodal risk with transaction velocity multiplier.
+        """
+        v_data = self.record_event(entity_id, timestamp=timestamp)
+        adjusted_score = min(
+            1.0, max(0.0, base_risk_score * v_data["velocity_multiplier"])
+        )
+
+        return {
+            "base_risk_score": round(base_risk_score, 4),
+            "adjusted_risk_score": round(adjusted_score, 4),
+            "velocity_multiplier": v_data["velocity_multiplier"],
+            "window_count": v_data["window_count"],
+            "rate_per_minute": v_data["rate_per_minute"],
+            "burst_flagged": v_data["burst_flagged"],
         }
