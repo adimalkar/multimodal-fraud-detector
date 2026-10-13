@@ -77,14 +77,30 @@ def score_run(
     versions = {row.get("pipeline_version") for row in predictions.values()}
     registry_hashes = {row.get("registry_sha256") for row in predictions.values()}
     code_hashes = {row.get("code_sha256") for row in predictions.values()}
+    # Older VLM runs bind their prompt; pixel-detector runs bind preprocessing
+    # and decision settings instead. Both represent the frozen run config.
+    config_hashes = {
+        row.get("run_config_sha256", row.get("prompt_sha256"))
+        for row in predictions.values()
+    }
     prompt_hashes = {row.get("prompt_sha256") for row in predictions.values()}
+    checkpoint_hashes = {row.get("checkpoint_sha256") for row in predictions.values()}
+    model_load_times = {row.get("model_load_ms") for row in predictions.values()}
+    cost_bases = {(row.get("usage") or {}).get("cost_basis", "provider_reported")
+                  for row in predictions.values()}
     if len(model_ids) != 1 or None in model_ids or len(versions) != 1 or None in versions:
         raise ValueError("Run must have one model ID and one pipeline version")
     for name, hashes in (
-        ("registry", registry_hashes), ("code", code_hashes), ("prompt", prompt_hashes)
+        ("registry", registry_hashes), ("code", code_hashes), ("run config", config_hashes)
     ):
         if len(hashes) != 1 or not isinstance(next(iter(hashes)), str):
             raise ValueError(f"Run has missing or mixed {name} hashes")
+    if len(checkpoint_hashes) != 1:
+        raise ValueError("Run has mixed checkpoint hashes")
+    if len(prompt_hashes) != 1 or len(cost_bases) != 1:
+        raise ValueError("Run has mixed prompt hashes or cost bases")
+    if len(model_load_times) != 1:
+        raise ValueError("Run has mixed model load times")
     if expected_registry_sha256 and registry_hashes != {expected_registry_sha256}:
         raise ValueError("Prediction registry hash differs from current manifest")
 
@@ -104,16 +120,6 @@ def score_run(
             errors += 1
         if status == "unpriced":
             unpriced += 1
-        if status not in {"ok", "unpriced"} or classification is None:
-            continue
-        if item.label == "authentic":
-            evaluated_authentic += 1
-        else:
-            evaluated_generated += 1
-        if classification == "Fake" and item.label == "authentic":
-            fp += 1
-        if classification == "Fake" and item.label == "fully_generated":
-            tp += 1
         latency = row.get("latency_ms")
         if (
             isinstance(latency, (int, float)) and not isinstance(latency, bool)
@@ -126,6 +132,16 @@ def score_run(
             and math.isfinite(cost) and cost >= 0
         ):
             costs.append(float(cost))
+        if status not in {"ok", "unpriced"} or classification is None:
+            continue
+        if item.label == "authentic":
+            evaluated_authentic += 1
+        else:
+            evaluated_generated += 1
+        if classification == "Fake" and item.label == "authentic":
+            fp += 1
+        if classification == "Fake" and item.label == "fully_generated":
+            tp += 1
         slice_name = item.generator_family if item.label == "fully_generated" else "authentic"
         bucket = slices.setdefault(slice_name, {"total": 0, "fake_predictions": 0})
         bucket["total"] += 1
@@ -137,7 +153,11 @@ def score_run(
         "pipeline_version": next(iter(versions)),
         "registry_sha256": next(iter(registry_hashes)),
         "code_sha256": next(iter(code_hashes)),
-        "prompt_sha256": next(iter(prompt_hashes)),
+        "run_config_sha256": next(iter(config_hashes)),
+        "prompt_sha256": next(iter(prompt_hashes)) if len(prompt_hashes) == 1 else None,
+        "checkpoint_sha256": next(iter(checkpoint_hashes)),
+        "model_load_ms": next(iter(model_load_times)),
+        "cost_basis": next(iter(cost_bases)),
         "items": len(selected),
         "attempted_items": len(predictions),
         "authentic_items": authentic_count,
@@ -157,9 +177,10 @@ def score_run(
         "p95_latency_ms": _percentile(latencies, 0.95),
         "slices": slices,
         "limitations": [
-            "The VLM confidence is uncalibrated.",
+            "Model scores and self-reported confidence are uncalibrated.",
             "This compares fully generated vs authentic images only, not fraud or local edits.",
-        ],
+        ] + (["Local compute, storage, and hardware costs are not included."]
+             if next(iter(cost_bases)) == "external_api_only" else []),
     }
 
 

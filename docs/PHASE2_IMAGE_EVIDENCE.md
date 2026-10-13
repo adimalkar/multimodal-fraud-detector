@@ -13,7 +13,7 @@ The SDK's `Trusted` state means that its configured trust roots accepted the sig
 ## Still required for the image release gate
 
 - Build a rights-cleared, independently labeled image set with camera, generated, edit, screenshot and recompression strata. The existing evaluation registry can enforce hashes, rights and split boundaries; none of its smoke fixtures measures detector accuracy.
-- Select a commercially usable pixel detector **including checkpoint, backbone and training-data rights**, then add a pinned preprocessing/adapter and run it against the existing VLM baseline on paired held-out examples. Measure false positives, recall by source and transformation, abstention, runtime and cost before exposing a score.
+- Select a commercially usable pixel detector **including checkpoint, backbone and training-data rights**, then run it against the existing VLM baseline on paired held-out examples. An [offline pinned Nonescape Mini research adapter](PHASE2_IMAGE_CANDIDATE_EVALUATION.md) now exists, but its scraped training data still need a commercial-rights review. Measure false positives, recall by source and transformation, abstention, runtime and cost before exposing a score.
 - Evaluate local edit and face manipulation with separate labels and localization metrics. They are currently `not_checked`; whole-image provenance cannot answer either question.
 - Test current C2PA trust roots, real trusted and revoked fixtures, remote-manifest policy, and malformed inputs in a staging worker with CPU/memory/time limits. The checked-in fixture verifies the valid-untrusted and tamper states only.
 

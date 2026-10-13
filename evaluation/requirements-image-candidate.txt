@@ -1,0 +1,5 @@
+# Offline research runner only. Keep these out of the production API image.
+torch==2.7.1
+torchvision==0.22.1
+safetensors==0.5.3
+Pillow==11.3.0

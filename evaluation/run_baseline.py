@@ -26,14 +26,14 @@ def run_pilot(
     account_hard_cap_confirmed: bool = False,
 ) -> int:
     """Collect pilot observations; account-level hard cap is required separately."""
-    from backend import qwen_agent
-
     if not account_hard_cap_confirmed:
         raise ValueError("Provider account hard cap must be confirmed before paid calls")
     if max_calls < 1 or not math.isfinite(max_observed_cost_usd) or max_observed_cost_usd <= 0:
         raise ValueError("Positive --max-calls and --max-observed-cost-usd are required")
     if output.exists():
         raise ValueError("Output already exists; use a new run file to preserve provenance")
+    from backend import qwen_agent
+
     if model_id not in qwen_agent.ALLOWED_VISION_MODELS:
         raise ValueError("Model is not on the approved vision allowlist")
     if not qwen_agent.OPENROUTER_API_KEY:
