@@ -310,3 +310,189 @@ class TransactionVelocityTracker:
             "rate_per_minute": v_data["rate_per_minute"],
             "burst_flagged": v_data["burst_flagged"],
         }
+
+
+class EntityCollusionDetector:
+    """
+    Detects cross-entity collusion syndicates and calculates graph risk propagation
+    over shared device, IP, and account attributes.
+    """
+
+    def __init__(
+        self,
+        damping_factor: float = 0.35,
+        min_syndicate_size: int = 2,
+        high_risk_threshold: float = 0.65,
+    ):
+        self.damping_factor = damping_factor
+        self.min_syndicate_size = min_syndicate_size
+        self.high_risk_threshold = high_risk_threshold
+        # entity_id -> {"base_risk": float, "attributes": dict[str, str]}
+        self.entities: dict[str, dict[str, Any]] = {}
+        # attribute_key:value -> set of entity_ids
+        self.attribute_index: dict[str, set[str]] = {}
+
+    def register_entity(
+        self,
+        entity_id: str,
+        attributes: dict[str, Any],
+        base_risk: float = 0.0,
+    ) -> None:
+        """
+        Registers an entity with its associated identifiers (e.g. ip, device_hash, ssn_hash, bank_id).
+        """
+        self.entities[entity_id] = {
+            "base_risk": min(1.0, max(0.0, float(base_risk))),
+            "attributes": {
+                k: str(v)
+                for k, v in attributes.items()
+                if v is not None and str(v).strip()
+            },
+        }
+        for k, v in self.entities[entity_id]["attributes"].items():
+            attr_key = f"{k}:{v}"
+            if attr_key not in self.attribute_index:
+                self.attribute_index[attr_key] = set()
+            self.attribute_index[attr_key].add(entity_id)
+
+    def get_neighbors(self, entity_id: str) -> tuple[set[str], list[str]]:
+        """
+        Finds all entities connected through at least one shared attribute.
+        Returns: (set of neighbor entity_ids, list of shared attribute keys).
+        """
+        if entity_id not in self.entities:
+            return set(), []
+
+        neighbors: set[str] = set()
+        shared_attrs: set[str] = set()
+        for k, v in self.entities[entity_id]["attributes"].items():
+            attr_key = f"{k}:{v}"
+            connected = self.attribute_index.get(attr_key, set())
+            for neighbor in connected:
+                if neighbor != entity_id:
+                    neighbors.add(neighbor)
+                    shared_attrs.add(attr_key)
+
+        return neighbors, sorted(shared_attrs)
+
+    def detect_collusion_rings(self) -> list[dict[str, Any]]:
+        """
+        Identifies connected components (collusion clusters) in the entity graph.
+        Computes ring density, shared attributes, and syndication risk tier.
+        """
+        visited: set[str] = set()
+        rings: list[dict[str, Any]] = []
+
+        for entity_id in self.entities:
+            if entity_id in visited:
+                continue
+
+            # BFS to find connected component
+            component: list[str] = []
+            queue = [entity_id]
+            visited.add(entity_id)
+
+            while queue:
+                curr = queue.pop(0)
+                component.append(curr)
+                neighbors, _ = self.get_neighbors(curr)
+                for n in neighbors:
+                    if n not in visited:
+                        visited.add(n)
+                        queue.append(n)
+
+            if len(component) >= self.min_syndicate_size:
+                ring_risks = [self.entities[e]["base_risk"] for e in component]
+                max_risk = max(ring_risks) if ring_risks else 0.0
+                mean_risk = sum(ring_risks) / len(ring_risks) if ring_risks else 0.0
+
+                # Collect all shared attributes inside the component
+                all_shared_attrs: set[str] = set()
+                for e in component:
+                    for k, v in self.entities[e]["attributes"].items():
+                        attr_key = f"{k}:{v}"
+                        if len(self.attribute_index.get(attr_key, set())) > 1:
+                            all_shared_attrs.add(attr_key)
+
+                is_syndicate = (
+                    max_risk >= self.high_risk_threshold
+                    or len(all_shared_attrs) >= 2
+                    or len(component) >= 3
+                )
+
+                # Synergy penalty scales with cluster size and max risk
+                penalty = 0.0
+                if is_syndicate:
+                    size_factor = min(0.15, (len(component) - 1) * 0.05)
+                    risk_factor = max_risk * 0.15
+                    penalty = round(size_factor + risk_factor, 3)
+
+                ring_id = f"ring_{len(rings) + 1}"
+                rings.append(
+                    {
+                        "ring_id": ring_id,
+                        "size": len(component),
+                        "entities": sorted(component),
+                        "shared_attributes": sorted(all_shared_attrs),
+                        "mean_base_risk": round(mean_risk, 4),
+                        "max_base_risk": round(max_risk, 4),
+                        "is_syndicate": is_syndicate,
+                        "syndicate_risk_penalty": penalty,
+                    }
+                )
+
+        return rings
+
+    def compute_propagated_risk(self, entity_id: str) -> dict[str, Any]:
+        """
+        Computes the network-propagated fraud risk for an entity based on
+        its base risk score and the maximum risk of its connected cluster neighbors.
+        """
+        if entity_id not in self.entities:
+            return {
+                "entity_id": entity_id,
+                "base_risk": 0.0,
+                "propagated_risk": 0.0,
+                "network_risk_boost": 0.0,
+                "neighbor_count": 0,
+                "shared_attributes": [],
+                "syndicate_flagged": False,
+            }
+
+        base_risk = self.entities[entity_id]["base_risk"]
+        neighbors, shared_attrs = self.get_neighbors(entity_id)
+
+        if not neighbors:
+            return {
+                "entity_id": entity_id,
+                "base_risk": round(base_risk, 4),
+                "propagated_risk": round(base_risk, 4),
+                "network_risk_boost": 0.0,
+                "neighbor_count": 0,
+                "shared_attributes": [],
+                "syndicate_flagged": False,
+            }
+
+        neighbor_risks = [self.entities[n]["base_risk"] for n in neighbors]
+        max_neighbor_risk = max(neighbor_risks) if neighbor_risks else 0.0
+
+        # Network risk boost: scales with the most severe neighbor and the number of shared attributes
+        attr_multiplier = min(1.5, 1.0 + (len(shared_attrs) - 1) * 0.15)
+        raw_boost = max_neighbor_risk * self.damping_factor * attr_multiplier
+        propagated_risk = min(1.0, max(base_risk, base_risk + raw_boost))
+
+        syndicate_flagged = (
+            max_neighbor_risk >= self.high_risk_threshold
+            or len(neighbors) >= 2
+            or len(shared_attrs) >= 2
+        )
+
+        return {
+            "entity_id": entity_id,
+            "base_risk": round(base_risk, 4),
+            "propagated_risk": round(propagated_risk, 4),
+            "network_risk_boost": round(propagated_risk - base_risk, 4),
+            "neighbor_count": len(neighbors),
+            "shared_attributes": shared_attrs,
+            "syndicate_flagged": syndicate_flagged,
+        }
