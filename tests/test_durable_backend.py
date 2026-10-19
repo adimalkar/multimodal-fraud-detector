@@ -298,6 +298,36 @@ def test_pdf_ocr_version_uses_its_own_queue_without_model(client, monkeypatch):
     assert store.get(job_id, "tenant-a")["billing_started"] == 0
 
 
+def test_pdf_field_version_uses_v4_queue_and_abstains_without_invoice(client, monkeypatch):
+    monkeypatch.setenv("PDF_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setenv("PDF_SIGNATURE_PIPELINE_ENABLED", "1")
+    monkeypatch.setenv("PDF_OCR_PIPELINE_ENABLED", "1")
+    monkeypatch.setenv("PDF_FIELD_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+    monkeypatch.setattr(app_module, "execute_agent_analysis",
+                        lambda *_: pytest.fail("Field path called model"))
+    data = pdf_bytes()
+    files = {"file": ("invoice.pdf", data, "application/pdf")}
+    request_headers = headers(**{"Idempotency-Key": "pdf-field-version"})
+    submitted = client.post("/api/analyze", headers=request_headers, files=files)
+    assert submitted.status_code == 200
+    job_id = submitted.json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    assert store.get(job_id, "tenant-a")["status"] == "queued_pdf_v4"
+    assert store.get(job_id, "tenant-a")["pipeline_version"] == "pdf-evidence-v4"
+    assert client.get(f"/api/jobs/{job_id}", headers=headers()).json()["status"] == "queued"
+
+    monkeypatch.setenv("PDF_FIELD_PIPELINE_ENABLED", "0")
+    assert client.post("/api/analyze", headers=request_headers, files=files).status_code == 409
+    assert run_once(store, artifacts)
+    completed = client.get(f"/api/jobs/{job_id}", headers=headers()).json()
+    assert completed["status"] == "completed"
+    assert completed["pipeline_version"] == "pdf-evidence-v4"
+    assert completed["result"]["task_results"][2]["finding"] == "undetermined"
+    assert completed["result"]["model_usage"] == {"cost": 0.0, "calls": 0}
+    assert store.get(job_id, "tenant-a")["billing_started"] == 0
+
+
 def test_pdf_idempotency_cannot_replay_across_pipeline_versions(client, monkeypatch):
     data = pdf_bytes()
     files = {"file": ("invoice.pdf", data, "application/pdf")}
