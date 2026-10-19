@@ -19,7 +19,7 @@ pinned: false
 
 **FraudSight AI** is an in-progress visual evidence screening application for images, PDFs, and videos. The backend samples bounded visual inputs, sends one request to an OpenRouter vision model, and combines its provisional result with extracted metadata. A model verdict is not proof of AI generation or insurance fraud; every result requires human review.
 
-The opt-in durable backend has zero-model-call image provenance and PDF structure paths. The new PDF signature path adds offline integrity and revision observations. Each path explicitly abstains on AI-generation and fraud classification; see [image evidence](docs/PHASE2_IMAGE_EVIDENCE.md), [PDF structure evidence](docs/PHASE3_PDF_EVIDENCE.md), and [PDF signature evidence](docs/PHASE3_PDF_SIGNATURE_EVIDENCE.md). These paths are not automatically active on the public site.
+The opt-in durable backend has zero-model-call image provenance and PDF structure paths. The PDF signature and OCR paths add offline integrity, revision, and bounded page-reading observations. Each path explicitly abstains on AI-generation and fraud classification; see [image evidence](docs/PHASE2_IMAGE_EVIDENCE.md), [PDF structure evidence](docs/PHASE3_PDF_EVIDENCE.md), [PDF signature evidence](docs/PHASE3_PDF_SIGNATURE_EVIDENCE.md), and [PDF OCR evidence](docs/PHASE3_PDF_OCR_EVIDENCE.md). These paths are not automatically active on the public site.
 
 The repository includes a Next.js frontend, a FastAPI backend, optional object storage, and PostgreSQL or SQLite persistence. OpenRouter calls are billed even when the hosting tier is free.
 
@@ -38,6 +38,7 @@ flowchart TD
     Worker -->|image evidence flag| C2PA[Original-byte C2PA observations]
     Worker -->|PDF evidence flag| PDF1[Bounded PDF structure observations]
     PDF1 -->|signature flag, v2| PDF2[Offline signature and revision observations]
+    PDF2 -->|OCR flag, v3| PDF3[Bounded page OCR and coverage]
 
     Worker -. planned and gated .-> Image[Pixel and local-edit evaluation]
     Worker -. planned and gated .-> Video[Temporal video evidence]
@@ -47,6 +48,7 @@ flowchart TD
     C2PA --> Results
     PDF1 --> Results
     PDF2 --> Results
+    PDF3 --> Results
     Results --> Review[Manual review]
     Review --> UI
 ```

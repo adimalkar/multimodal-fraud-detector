@@ -1,6 +1,6 @@
 # Multimodal detection implementation plan
 
-Status: living implementation plan, updated 2026-09-27. Implement one bounded milestone per PR. This plan supersedes the sequencing in `DETECTOR_ARCHITECTURE_REVIEW.md` and expands `MODEL_EVALUATION_PLAN.md`; those documents and the historical `IMPLEMENTATION_REPORT.md` remain source records.
+Status: living implementation plan, updated 2026-10-19. Implement one bounded milestone per PR. This plan supersedes the sequencing in `DETECTOR_ARCHITECTURE_REVIEW.md` and expands `MODEL_EVALUATION_PLAN.md`; those documents and the historical `IMPLEMENTATION_REPORT.md` remain source records.
 
 ## Product contract and current baseline
 
@@ -73,7 +73,8 @@ Roll out behind a feature flag in shadow mode, then to a small authenticated coh
 | **2 — image** | Original-byte C2PA check, pixel-detector adapter and benchmark, optional local/face branch only after task-specific labels, reviewed image result. | Commercial rights verified for every shipped component; held-out image and cost gate met, otherwise only evidence/experimental output. |
 | **3a — PDF structure** | Bounded parser and per-page structural coverage, versioned `pdf-evidence-v1`. Draft PR #19. | Real parser fixtures and durable worker tests; detection accuracy remains pending. |
 | **3b — PDF signatures** | Offline signature integrity, explicit local trust roots, post-signature revision observations, versioned `pdf-evidence-v2`. | Signed, unsigned, altered and revised fixtures; no fraud verdict. Worker deployed before the new web flag. |
-| **3c — PDF reading and rules** | Bounded renderer/OCR, page lineage, first declared document schema and deterministic field rules. | Known document edits and held-out field/false-positive gate met; unsupported types abstain. |
+| **3c1 — PDF reading** | Bounded renderer and OCR with page lineage, word boxes and explicit skipped-page coverage, versioned `pdf-evidence-v3`. | Real scan/text-layer fixtures and durable worker tests; no document verdict. |
+| **3c2 — PDF field rules** | First declared document schema with cited field extraction and deterministic consistency rules. | Known document edits and held-out field/false-positive gate met; unsupported types abstain. |
 | **4 — video** | Scene-aware bounded sampling, timestamped frame/face tracks, candidate temporal detector, segment aggregation and coverage report. | Held-out full-generation and face-edit gates met separately; short-edit miss rate and worst-case cost measured. |
 | **5 — decision and product UI** | Calibrated per-task policy only where justified, reviewer workflow, evidence-linked frontend redesign, historical result versioning and shadow rollout. | Human review can reproduce each finding; no generic fraud score; measured operational and false-positive targets hold in the cohort. |
 
