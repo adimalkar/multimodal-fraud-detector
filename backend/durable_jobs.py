@@ -12,7 +12,8 @@ from pathlib import Path
 
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
 from backend.pdf_evidence import (
-    PDF_OCR_PIPELINE_VERSION, PDF_PIPELINE_VERSION, PDF_SIGNATURE_PIPELINE_VERSION,
+    PDF_FIELD_PIPELINE_VERSION, PDF_OCR_PIPELINE_VERSION, PDF_PIPELINE_VERSION,
+    PDF_SIGNATURE_PIPELINE_VERSION,
 )
 
 SCHEMA_VERSION = "screening-v1"
@@ -240,6 +241,7 @@ class DurableJobStore:
                 job_id = str(uuid.uuid4())
                 item_status = (
                     "queued_image" if item.get("pipeline_version") == IMAGE_PIPELINE_VERSION
+                    else "queued_pdf_v4" if item.get("pipeline_version") == PDF_FIELD_PIPELINE_VERSION
                     else "queued_pdf_v3" if item.get("pipeline_version") == PDF_OCR_PIPELINE_VERSION
                     else "queued_pdf_v2" if item.get("pipeline_version") == PDF_SIGNATURE_PIPELINE_VERSION
                     else "queued_pdf" if item.get("pipeline_version") == PDF_PIPELINE_VERSION
@@ -297,13 +299,13 @@ class DurableJobStore:
         try:
             if self.postgres:
                 row = self._row(self._execute(conn, """
-                    SELECT * FROM durable_jobs WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3')
+                    SELECT * FROM durable_jobs WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3','queued_pdf_v4')
                     ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED
                 """))
             else:
                 self._execute(conn, "BEGIN IMMEDIATE")
                 row = self._row(self._execute(conn, """
-                    SELECT * FROM durable_jobs WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3')
+                    SELECT * FROM durable_jobs WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3','queued_pdf_v4')
                     ORDER BY created_at, id LIMIT 1
                 """))
             if not row:
@@ -388,7 +390,7 @@ class DurableJobStore:
         self, job_id: str, token: str, code: str, message: str, *,
         retry: bool = False, retry_status: str = "queued",
     ):
-        if retry_status not in {"queued", "queued_image", "queued_pdf", "queued_pdf_v2", "queued_pdf_v3"}:
+        if retry_status not in {"queued", "queued_image", "queued_pdf", "queued_pdf_v2", "queued_pdf_v3", "queued_pdf_v4"}:
             raise ValueError("Invalid retry queue status")
         status = retry_status if retry else "failed"
         self._transition(job_id, token, """
@@ -424,7 +426,7 @@ class DurableJobStore:
                 SELECT COUNT(*) AS active_items,
                        COUNT(DISTINCT parent_id) AS active_batches
                 FROM durable_jobs
-                WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3','processing')
+                WHERE kind='item' AND status IN ('queued','queued_image','queued_pdf','queued_pdf_v2','queued_pdf_v3','queued_pdf_v4','processing')
             """))
             return {
                 "active_jobs": row["active_items"],

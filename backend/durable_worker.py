@@ -13,7 +13,8 @@ from backend.durable_jobs import SCHEMA_VERSION, DurableJobStore, QueueUnavailab
 from backend.evidence_artifacts import EvidenceArtifactStore
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
 from backend.pdf_evidence import (
-    PDF_OCR_PIPELINE_VERSION, PDF_PIPELINE_VERSION, PDF_SIGNATURE_PIPELINE_VERSION,
+    PDF_FIELD_PIPELINE_VERSION, PDF_OCR_PIPELINE_VERSION, PDF_PIPELINE_VERSION,
+    PDF_SIGNATURE_PIPELINE_VERSION,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -90,6 +91,12 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
             result = analyze_pdf_ocr_evidence(
                 str(materialized), job["content_type"], job["artifact_sha256"]
             )
+        elif job["pipeline_version"] == PDF_FIELD_PIPELINE_VERSION:
+            from backend.pdf_evidence import analyze_pdf_field_evidence
+
+            result = analyze_pdf_field_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
         elif job["pipeline_version"] == SCHEMA_VERSION:
             store.mark_billing_started(job["id"], token)
             billed = True
@@ -134,6 +141,7 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
                 job["id"], token, code, message, retry=retry,
                 retry_status=(
                     "queued_image" if job["pipeline_version"] == IMAGE_PIPELINE_VERSION
+                    else "queued_pdf_v4" if job["pipeline_version"] == PDF_FIELD_PIPELINE_VERSION
                     else "queued_pdf_v3" if job["pipeline_version"] == PDF_OCR_PIPELINE_VERSION
                     else "queued_pdf_v2" if job["pipeline_version"] == PDF_SIGNATURE_PIPELINE_VERSION
                     else "queued_pdf" if job["pipeline_version"] == PDF_PIPELINE_VERSION

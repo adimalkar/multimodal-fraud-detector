@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from backend.pdf_invoice_fields import extract_invoice_fields, ocr_lines
+from backend.pdf_invoice_text_probe import MAX_FIELD_PAGES
 from backend.pdf_probe import MAX_PAGES, PYPDF_VERSION
 from backend.pdf_ocr_probe import MAX_OCR_PAGES
 from backend.pdf_signature_probe import PYHANKO_VERSION
@@ -17,12 +19,15 @@ from backend.pdf_signature_probe import PYHANKO_VERSION
 PDF_PIPELINE_VERSION = "pdf-evidence-v1"
 PDF_SIGNATURE_PIPELINE_VERSION = "pdf-evidence-v2"
 PDF_OCR_PIPELINE_VERSION = "pdf-evidence-v3"
+PDF_FIELD_PIPELINE_VERSION = "pdf-evidence-v4"
 PDF_POLICY_VERSION = "manual-review-v1"
 PDF_SIGNATURE_POLICY_VERSION = "manual-review-v2"
 PDF_OCR_POLICY_VERSION = "manual-review-v3"
+PDF_FIELD_POLICY_VERSION = "manual-review-v4"
 MAX_PDF_BYTES = 20 * 1024 * 1024
 PROBE_TIMEOUT_SECONDS = 25
 OCR_PROBE_TIMEOUT_SECONDS = 75
+FIELD_PROBE_TIMEOUT_SECONDS = 20
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -116,6 +121,31 @@ def _ocr_probe(path: Path, pages: list[int]) -> dict:
         return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "pages": []}
     if not isinstance(result, dict) or result.get("state") not in {
         "read", "partial", "dependency_unavailable", "probe_error"
+    } or not isinstance(result.get("pages"), list):
+        return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "pages": []}
+    return result
+
+
+def _invoice_text_probe(path: Path, pages: list[int]) -> dict:
+    try:
+        process = subprocess.run(
+            [sys.executable, "-m", "backend.pdf_invoice_text_probe", str(path),
+             ",".join(str(page) for page in pages)],
+            cwd=Path(__file__).resolve().parent.parent,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env={"PATH": os.defpath, "LANG": "C.UTF-8", "PYTHONNOUSERSITE": "1"},
+            timeout=FIELD_PROBE_TIMEOUT_SECONDS, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"state": "probe_error", "error_type": "TimeoutExpired", "pages": []}
+    if process.returncode != 0 or len(process.stdout) > 96 * 1024:
+        return {"state": "probe_error", "error_type": "ProbeFailed", "pages": []}
+    try:
+        result = json.loads(process.stdout)
+    except (ValueError, UnicodeDecodeError):
+        return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "pages": []}
+    if not isinstance(result, dict) or result.get("state") not in {
+        "read", "partial", "file_limit_exceeded", "encrypted", "page_limit_exceeded", "probe_error"
     } or not isinstance(result.get("pages"), list):
         return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "pages": []}
     return result
@@ -289,4 +319,80 @@ def analyze_pdf_ocr_evidence(path: str, content_type: str, expected_sha256: str)
     })
     field_task["coverage"]["ocr_run"] = bool(observations)
     field_task["limitations"] = "OCR observations are available, but no field extraction or document rules have run."
+    return result
+
+
+def analyze_pdf_field_evidence(path: str, content_type: str, expected_sha256: str) -> dict:
+    """Check invoice arithmetic only after cited, complete, unambiguous reading."""
+    result = analyze_pdf_ocr_evidence(path, content_type, expected_sha256)
+    result["pipeline_version"] = PDF_FIELD_PIPELINE_VERSION
+    for task in result["task_results"]:
+        task["policy_version"] = PDF_FIELD_POLICY_VERSION
+    structure, _, field_task, reading = result["task_results"]
+    field_task.update({
+        "document_schema": "invoice-subtotal-tax-total-v1",
+        "state": "not_checked", "evidence": [],
+        "coverage": {"ocr_run": reading["coverage"]["ocr_run"],
+                     "document_schema_checked": False,
+                     "pages_total": structure["coverage"]["pages_total"],
+                     "pages_selected": [], "pages_read": [], "pages_skipped_budget": []},
+        "limitations": (
+            "Only invoice subtotal, tax and total arithmetic is checked. Extracted values "
+            "are tenant-private observations, not proof of authenticity or payment. "
+            "Other charges, credits, currencies and document layouts are unsupported."
+        ),
+    })
+    if structure["status"] != "supported":
+        field_task["state"] = "not_checked_structure"
+        return result
+    pages = structure["evidence"].get("pages", [])
+    selected = pages[:MAX_FIELD_PAGES]
+    field_task["coverage"]["pages_selected"] = [page["page"] for page in selected]
+    field_task["coverage"]["pages_skipped_budget"] = [page["page"] for page in pages[MAX_FIELD_PAGES:]]
+    text_pages = [page["page"] for page in selected if page.get("text_chars", 0) >= 20]
+    text_result = _invoice_text_probe(Path(path), text_pages) if text_pages else {
+        "state": "read", "pages": []}
+    if _sha256_file(Path(path))[0] != expected_sha256:
+        raise ValueError("Original evidence hash changed during PDF field analysis")
+    text_observations = {page.get("page"): page for page in text_result.get("pages", [])}
+    ocr_observations = {
+        page.get("page"): page for page in reading["evidence"].get("pages", [])
+    } if isinstance(reading["evidence"], dict) else {}
+    lines = []
+    complete = len(pages) <= MAX_FIELD_PAGES and text_result["state"] == "read"
+    for page in selected:
+        number = page["page"]
+        if number in text_pages:
+            observed = text_observations.get(number, {})
+            if observed.get("state") != "read" or observed.get("lines_capped"):
+                complete = False
+                continue
+            lines.extend({"text": line["text"],
+                          "citation": {"page": number, "source": "text_layer", "line": line["line"]}}
+                         for line in observed["lines"])
+        else:
+            observed = ocr_observations.get(number, {})
+            if observed.get("state") != "read" or observed.get("words_capped") or any(
+                    word.get("text_capped") for word in observed.get("words", [])):
+                complete = False
+                continue
+            page_lines = ocr_lines(observed)
+            if any(line["text_capped"] for line in page_lines):
+                complete = False
+            lines.extend(page_lines)
+        field_task["coverage"]["pages_read"].append(number)
+    # A missing invoice marker on unread pages is not an unsupported type claim.
+    extraction = extract_invoice_fields(lines, complete)
+    if not complete and extraction["state"] == "unsupported_document_type":
+        extraction = {"state": "incomplete_coverage", "fields": {},
+                      "check": "not_run", "reason": "unread_or_truncated_page"}
+    field_task.update({
+        "status": "supported" if extraction["state"] == "checked" else
+                  "unsupported" if extraction["state"] == "unsupported_document_type" else
+                  "inconclusive",
+        "finding": "evidence_present" if extraction["check"] == "mismatch" else
+                   "evidence_not_found" if extraction["check"] == "match" else "undetermined",
+        "state": extraction["state"], "evidence": extraction,
+    })
+    field_task["coverage"]["document_schema_checked"] = extraction["state"] == "checked"
     return result
