@@ -347,7 +347,7 @@ def test_video_sampling_version_has_own_queue_and_no_model(client, tmp_path, mon
     assert completed["pipeline_version"] == "video-evidence-v2"
     sampling = next(item for item in completed["result"]["task_results"]
                     if item["task"] == "video_sampling")
-    assert sampling["coverage"]["frames_read"] == 3
+    assert sampling["coverage"]["frames_read"] == 3, sampling
     assert completed["result"]["classification"] == "Unknown"
     assert completed["result"]["model_usage"] == {"cost": 0.0, "calls": 0}
     assert store.get(job_id, "tenant-a")["billing_started"] == 0

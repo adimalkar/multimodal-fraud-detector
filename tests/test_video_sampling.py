@@ -40,7 +40,7 @@ def test_hard_cut_has_timestamped_frame_lineage_without_verdict(tmp_path):
     assert result["classification"] == "Unknown"
     assert result["decision"] == "manual_review"
     assert result["model_usage"] == {"cost": 0.0, "calls": 0}
-    assert sampling["status"] == "supported"
+    assert sampling["status"] == "supported", sampling
     assert sampling["finding"] == "undetermined"
     assert sampling["coverage"]["scene_scan_complete"] is True
     assert sampling["coverage"]["frames_read"] == 3
@@ -63,7 +63,7 @@ def test_hard_cut_has_timestamped_frame_lineage_without_verdict(tmp_path):
 def test_steady_clip_keeps_anchor_coverage_and_duration_budget(tmp_path):
     steady = _analyze(_clip(tmp_path, hard_cut=False))
     sampling = steady["task_results"][-1]
-    assert sampling["state"] == "read"
+    assert sampling["state"] == "read", sampling
     assert sampling["evidence"]["scene_candidates_ms"] == []
     assert sampling["coverage"]["requested_count"] == 3
 
@@ -90,7 +90,7 @@ def test_frame_lineage_uses_video_stream_index_when_audio_is_first(tmp_path):
     video = next(item for item in structure["evidence"]["streams"]
                  if item["type"] == "video")
     assert video["index"] == 1
-    assert sampling["status"] == "supported"
+    assert sampling["status"] == "supported", sampling
     assert all(frame["source_stream_index"] == 1
                for frame in sampling["evidence"]["frames"])
 
