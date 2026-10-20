@@ -3,6 +3,8 @@
 import hashlib
 import io
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,16 @@ def pdf_bytes():
     output = io.BytesIO()
     writer.write(output)
     return output.getvalue()
+
+
+def video_bytes(tmp_path):
+    path = tmp_path / "queue-video.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "1",
+        "-f", "lavfi", "-i", "color=size=96x64:rate=12:duration=1",
+        "-c:v", "mpeg4", "-q:v", "5", "-an", "-y", str(path),
+    ], check=True, timeout=20)
+    return path.read_bytes()
 
 
 @pytest.fixture
@@ -264,6 +276,49 @@ def test_pdf_signature_artifact_retry_stays_in_v2_queue(client, monkeypatch):
     assert store.get(submitted.json()["job_id"], "tenant-a")["status"] == "queued_pdf_v2"
     assert run_once(store, artifacts)
     assert store.get(submitted.json()["job_id"], "tenant-a")["status"] == "completed"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+                    reason="FFmpeg system binaries unavailable")
+def test_video_structure_version_has_own_queue_retry_and_no_model(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+    monkeypatch.setattr(app_module, "execute_agent_analysis",
+                        lambda *_: pytest.fail("Video structure path called model"))
+    data = video_bytes(tmp_path)
+    files = {"file": ("clip.mp4", data, "video/mp4")}
+    request_headers = headers(**{"Idempotency-Key": "video-structure-version"})
+    submitted = client.post("/api/analyze", headers=request_headers, files=files)
+    assert submitted.status_code == 200
+    job_id = submitted.json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    assert store.get(job_id, "tenant-a")["status"] == "queued_video_v1"
+    assert store.get(job_id, "tenant-a")["pipeline_version"] == "video-evidence-v1"
+    assert client.get(f"/api/jobs/{job_id}", headers=headers()).json()["status"] == "queued"
+    monkeypatch.setenv("VIDEO_EVIDENCE_PIPELINE_ENABLED", "0")
+    monkeypatch.setattr(app_module, "missing_model_credentials", list)
+    assert client.post("/api/analyze", headers=request_headers, files=files).status_code == 409
+
+    original_materialize = artifacts.materialize
+    failures = [True]
+
+    def fail_once(*args):
+        if failures:
+            failures.clear()
+            raise OSError("temporary storage outage")
+        return original_materialize(*args)
+
+    monkeypatch.setattr(artifacts, "materialize", fail_once)
+    assert run_once(store, artifacts)
+    assert store.get(job_id, "tenant-a")["status"] == "queued_video_v1"
+    assert run_once(store, artifacts)
+    completed = client.get(f"/api/jobs/{job_id}", headers=headers()).json()
+    assert completed["status"] == "completed"
+    assert completed["pipeline_version"] == "video-evidence-v1"
+    assert completed["result"]["task_results"][0]["status"] == "supported"
+    assert completed["result"]["task_results"][1]["state"] == "not_checked"
+    assert completed["result"]["model_usage"] == {"cost": 0.0, "calls": 0}
+    assert store.get(job_id, "tenant-a")["billing_started"] == 0
 
 
 def test_pdf_idempotency_cannot_replay_across_pipeline_versions(client, monkeypatch):
