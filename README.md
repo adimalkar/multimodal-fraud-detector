@@ -12,7 +12,12 @@ pinned: false
 
 FraudSight AI is an in-progress evidence screening application for images, videos, and PDFs. It records what was inspected, what could not be checked, and where a reviewer should look. **No current path proves that media is AI-generated or that a claim is fraudulent.** Results require human review.
 
-The [public site](https://multimodal-fraud-detector-1.onrender.com/) runs the older screening deployment. The newer durable backend and evidence pipelines in this repository are opt-in and have **not been verified on that site**. This distinction matters when comparing a local result with the live product.
+## Live URLs
+
+- **Backend API:** [multimodal-fraud-detector-1.onrender.com](https://multimodal-fraud-detector-1.onrender.com/) — responds with the FraudSight AI Engine status JSON; [API documentation](https://multimodal-fraud-detector-1.onrender.com/docs) is under `/docs`.
+- **Frontend URL listed on GitHub:** [frontend-adimalkars-projects.vercel.app](https://frontend-adimalkars-projects.vercel.app/) — currently redirects unauthenticated visitors to Vercel login, so it is not a confirmed public website.
+
+The Render service is an API, not the user-facing frontend. The newer durable backend and evidence pipelines in this repository are opt-in and have **not been verified on that service**. This distinction matters when comparing a local result with the live product.
 
 ## Current architecture
 
