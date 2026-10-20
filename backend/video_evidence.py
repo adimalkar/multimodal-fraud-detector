@@ -13,8 +13,11 @@ from pathlib import Path
 from backend.video_probe import DEMUXERS, MAX_VIDEO_BYTES
 
 VIDEO_PIPELINE_VERSION = "video-evidence-v1"
+VIDEO_SAMPLING_PIPELINE_VERSION = "video-evidence-v2"
 VIDEO_POLICY_VERSION = "manual-review-video-v1"
+VIDEO_SAMPLING_POLICY_VERSION = "manual-review-video-v2"
 PROBE_TIMEOUT_SECONDS = 20
+SAMPLING_PROBE_TIMEOUT_SECONDS = 70
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:
@@ -59,6 +62,41 @@ def _probe(path: Path, content_type: str) -> dict:
         "probe_error", "file_limit_exceeded", "unsupported_media_type",
     } or not isinstance(result.get("streams"), list):
         return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "streams": []}
+    return result
+
+
+def _sampling_probe(path: Path, content_type: str) -> dict:
+    process = subprocess.Popen(
+        [sys.executable, "-m", "backend.video_sampling_probe", str(path), content_type],
+        cwd=Path(__file__).resolve().parent.parent,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        env={"PATH": os.defpath, "LANG": "C.UTF-8", "PYTHONNOUSERSITE": "1",
+             "OMP_THREAD_LIMIT": "1"},
+        start_new_session=os.name == "posix",
+    )
+    try:
+        output, _ = process.communicate(timeout=SAMPLING_PROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        return {"state": "probe_error", "error_type": "TimeoutExpired", "frames": []}
+    if process.returncode != 0 or len(output) > 128 * 1024:
+        return {"state": "probe_error", "error_type": "ProbeFailed", "frames": []}
+    try:
+        result = json.loads(output)
+    except (ValueError, UnicodeDecodeError):
+        return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "frames": []}
+    if not isinstance(result, dict) or result.get("state") not in {
+        "read", "partial", "dependency_unavailable", "structure_unavailable",
+        "sampling_limit_exceeded", "start_time_unsupported", "probe_error",
+    } or not isinstance(result.get("frames"), list):
+        return {"state": "probe_error", "error_type": "ProbeOutputInvalid", "frames": []}
     return result
 
 
@@ -122,3 +160,52 @@ def analyze_video_evidence(path: str, content_type: str, expected_sha256: str) -
             },
         ],
     }
+
+
+def analyze_video_sampling_evidence(path: str, content_type: str,
+                                    expected_sha256: str) -> dict:
+    """Add bounded frame lineage to v1, without a synthetic-video verdict."""
+    result = analyze_video_evidence(path, content_type, expected_sha256)
+    result["pipeline_version"] = VIDEO_SAMPLING_PIPELINE_VERSION
+    for task in result["task_results"]:
+        task["policy_version"] = VIDEO_SAMPLING_POLICY_VERSION
+    structure = result["task_results"][0]
+    sampling = {
+        "task": "video_sampling", "status": "inconclusive",
+        "finding": "undetermined", "state": "not_checked",
+        "evidence": [],
+        "coverage": {"duration_total_ms": None, "scene_scan_complete": False,
+                     "requested_count": 0, "frames_read": 0,
+                     "failed_requested_ms": [], "frames_retained": 0,
+                     "model_frames_inspected": 0},
+        "calibrated_score": None, "policy_version": VIDEO_SAMPLING_POLICY_VERSION,
+        "limitations": (
+            "At most six frames are decoded from clips of at most 20 seconds. "
+            "Scene scan uses six frames per second at 320 pixels and can miss short edits. "
+            "Frame hashes and timestamps are observations; no synthetic-video, face, "
+            "or audio detector ran. No derived frame is retained."
+        ),
+    }
+    result["task_results"].append(sampling)
+    if structure["status"] != "supported":
+        sampling["state"] = "not_checked_structure"
+        return result
+    sample = _sampling_probe(Path(path), content_type)
+    if _sha256_file(Path(path))[0] != expected_sha256:
+        raise ValueError("Original evidence hash changed during video sampling")
+    state = sample["state"]
+    sampling.update({
+        "status": "supported" if state == "read" else
+                  "unsupported" if state in {"dependency_unavailable", "sampling_limit_exceeded",
+                                             "start_time_unsupported"} else
+                  "error" if state == "probe_error" else "inconclusive",
+        "state": state,
+        "evidence": {"source_asset_sha256": expected_sha256, **sample},
+    })
+    sampling["coverage"].update(sample.get("coverage", {}))
+    structure["coverage"]["frames_decoded"] = sampling["coverage"]["frames_read"]
+    structure["limitations"] = (
+        "Container metadata and sampled-frame hashes are structural observations only. "
+        "Unsampled moments, audio, and face tracks were not reviewed by a detector."
+    )
+    return result
