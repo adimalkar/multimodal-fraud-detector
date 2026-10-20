@@ -40,8 +40,6 @@ def test_hard_cut_has_timestamped_frame_lineage_without_verdict(tmp_path):
     assert result["classification"] == "Unknown"
     assert result["decision"] == "manual_review"
     assert result["model_usage"] == {"cost": 0.0, "calls": 0}
-    if sampling["status"] != "supported":
-        print(json.dumps(sampling, indent=2))
     assert sampling["status"] == "supported", sampling
     assert sampling["finding"] == "undetermined"
     assert sampling["coverage"]["scene_scan_complete"] is True

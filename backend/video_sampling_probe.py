@@ -82,7 +82,8 @@ def _times(stderr: bytes, duration_ms: int) -> list[int]:
 
 def _scene_scan(path: Path, demuxer: str, duration_ms: int) -> tuple[list[int], bool, str | None]:
     command = _base() + [
-        "-t", f"{duration_ms / 1000 + 0.25:.3f}", "-f", demuxer, "-i", str(path),
+        "-t", f"{duration_ms / 1000 + 0.25:.3f}", "-f", demuxer,
+        "-threads:v", "1", "-i", str(path),
         "-map", "0:v:0", "-an", "-sn", "-dn",
         "-vf", f"fps={SCAN_FPS},scale=320:-2,select=gt(scene\\,{SCENE_THRESHOLD}),showinfo",
         "-fps_mode", "vfr", "-f", "null", "-",
@@ -136,7 +137,7 @@ def _frame(path: Path, demuxer: str, request: dict, directory: Path,
     target = directory / f"frame-{request['requested_ms']}.png"
     command = _base() + [
         "-copyts", "-ss", f"{request['requested_ms'] / 1000:.3f}",
-        "-t", "1.000", "-f", demuxer, "-i", str(path),
+        "-t", "1.000", "-f", demuxer, "-threads:v", "1", "-i", str(path),
         "-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1",
         "-vf", f"showinfo,scale={MAX_FRAME_EDGE}:-2", "-fps_mode", "vfr",
         "-threads:v", "1", "-f", "image2", "-update", "1",
