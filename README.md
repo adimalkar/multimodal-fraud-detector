@@ -108,4 +108,4 @@ GitHub Actions in [.github/workflows/ci.yml](.github/workflows/ci.yml) run Pytho
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The bundled frontend template has an [MIT license](frontend/LICENSE) naming Pedro Estevão. There is currently no license file at the repository root for the project as a whole.
