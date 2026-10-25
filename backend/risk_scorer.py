@@ -795,3 +795,103 @@ class BehavioralRiskDecayEngine:
             "clean_events_count": clean_count,
             "rehabilitation_complete": rehab_complete,
         }
+
+
+class ModalConflictDetector:
+    """
+    Detects inter-modal divergence, discrepancy anomalies, and adversarial masking
+    where acute fraud signals in one modality are diluted by benign signals in others.
+    """
+
+    def __init__(
+        self,
+        conflict_divergence_threshold: float = 0.45,
+        masking_boost_factor: float = 0.25,
+    ):
+        self.conflict_divergence_threshold = conflict_divergence_threshold
+        self.masking_boost_factor = masking_boost_factor
+
+    def evaluate_modalities(
+        self,
+        modality_scores: dict[str, float],
+    ) -> dict[str, Any]:
+        """
+        Analyzes discrepancy across named modalities (e.g. {'text': 0.1, 'visual': 0.95, 'metadata': 0.2}).
+        Calculates pairwise divergence, max spread, conflict entropy, and anti-masking penalty.
+        """
+        clean_scores = {
+            k: min(1.0, max(0.0, float(v)))
+            for k, v in modality_scores.items()
+            if v is not None
+        }
+
+        if len(clean_scores) < 2:
+            single_score = next(iter(clean_scores.values())) if clean_scores else 0.0
+            return {
+                "max_divergence": 0.0,
+                "mean_divergence": 0.0,
+                "conflict_detected": False,
+                "conflict_tier": "CONGRUENT",
+                "divergence_pairs": [],
+                "conflict_penalty": 0.0,
+                "linear_fused_risk": round(single_score, 4),
+                "adjusted_fused_risk": round(single_score, 4),
+            }
+
+        pairs = []
+        keys = list(clean_scores.keys())
+        diffs = []
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                k1, k2 = keys[i], keys[j]
+                diff = abs(clean_scores[k1] - clean_scores[k2])
+                diffs.append(diff)
+                pairs.append(
+                    {
+                        "modality_a": k1,
+                        "modality_b": k2,
+                        "score_a": clean_scores[k1],
+                        "score_b": clean_scores[k2],
+                        "divergence": round(diff, 4),
+                    }
+                )
+
+        max_div = max(diffs) if diffs else 0.0
+        mean_div = sum(diffs) / len(diffs) if diffs else 0.0
+        peak_score = max(clean_scores.values())
+        linear_mean = sum(clean_scores.values()) / len(clean_scores)
+
+        # Detect conflict tier
+        conflict_detected = max_div >= self.conflict_divergence_threshold
+        if max_div >= 0.70 and peak_score >= 0.75:
+            tier = "CRITICAL_MODAL_MASKING"
+            penalty = round(self.masking_boost_factor * (max_div / 1.0), 3)
+        elif conflict_detected:
+            tier = "HIGH_CONFLICT"
+            penalty = round(self.masking_boost_factor * 0.6 * (max_div / 1.0), 3)
+        elif max_div >= 0.25:
+            tier = "MILD_DISCREPANCY"
+            penalty = 0.0
+        else:
+            tier = "CONGRUENT"
+            penalty = 0.0
+
+        # Anti-masking adjusted risk ensures peak fraud signal is preserved
+        adjusted_risk = min(
+            1.0,
+            max(
+                linear_mean + penalty,
+                peak_score * (1.0 - (1.0 - max_div) * 0.2),
+            ),
+        )
+
+        return {
+            "max_divergence": round(max_div, 4),
+            "mean_divergence": round(mean_div, 4),
+            "conflict_detected": conflict_detected,
+            "conflict_tier": tier,
+            "divergence_pairs": pairs,
+            "conflict_penalty": penalty,
+            "linear_fused_risk": round(linear_mean, 4),
+            "adjusted_fused_risk": round(adjusted_risk, 4),
+        }
