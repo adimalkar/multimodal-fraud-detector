@@ -496,3 +496,161 @@ class EntityCollusionDetector:
             "shared_attributes": shared_attrs,
             "syndicate_flagged": syndicate_flagged,
         }
+
+
+class DeviceGeoAnomalyDetector:
+    """
+    Detects impossible travel velocity, rapid geolocation shifts,
+    and device fingerprint churn across sequential user events.
+    """
+
+    EARTH_RADIUS_KM = 6371.0
+
+    def __init__(
+        self,
+        max_plausible_speed_kmh: float = 900.0,
+        device_churn_window_seconds: float = 86400.0,
+        max_allowed_devices_in_window: int = 3,
+    ):
+        self.max_plausible_speed_kmh = max_plausible_speed_kmh
+        self.device_churn_window_seconds = device_churn_window_seconds
+        self.max_allowed_devices_in_window = max_allowed_devices_in_window
+        # user_id -> list of recent location records: {"lat": float, "lon": float, "timestamp": float}
+        self.location_history: dict[str, list[dict[str, Any]]] = {}
+        # user_id -> list of (device_fp, timestamp)
+        self.device_history: dict[str, list[tuple[str, float]]] = {}
+
+    @staticmethod
+    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """
+        Calculates great-circle distance between two geographic coordinates in kilometers.
+        """
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_phi = math.radians(lat2 - lat1)
+        delta_lambda = math.radians(lon2 - lon1)
+
+        a = (
+            math.sin(delta_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+        )
+        c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+        return DeviceGeoAnomalyDetector.EARTH_RADIUS_KM * c
+
+    def record_and_evaluate(
+        self,
+        user_id: str,
+        lat: float,
+        lon: float,
+        timestamp: float | None = None,
+        device_fingerprint: str | None = None,
+        is_vpn_or_datacenter: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Evaluates geolocation velocity against historical baseline, tracks device churn,
+        and generates explainable anomaly signals and a composite geo-risk score.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        flags: list[str] = []
+        impossible_travel = False
+        calculated_speed_kmh = 0.0
+        distance_km = 0.0
+        time_delta_seconds = 0.0
+        risk_components: list[float] = [0.0]
+
+        # 1. Geolocation and Impossible Travel Check
+        if self.location_history.get(user_id):
+            last_record = self.location_history[user_id][-1]
+            time_delta_seconds = now - last_record["timestamp"]
+
+            if time_delta_seconds >= 0.0:
+                distance_km = self.haversine_distance(
+                    last_record["lat"], last_record["lon"], lat, lon
+                )
+
+                hours = time_delta_seconds / 3600.0
+                if hours < 0.001:  # Sub-3.6 seconds
+                    if distance_km > 5.0:
+                        calculated_speed_kmh = round(distance_km / 0.001, 1)
+                        impossible_travel = True
+                        flags.append(
+                            f"IMPOSSIBLE_CONCURRENT_TRAVEL ({round(distance_km, 1)}km in {round(time_delta_seconds, 1)}s)"
+                        )
+                        risk_components.append(0.95)
+                else:
+                    calculated_speed_kmh = round(distance_km / hours, 1)
+                    if calculated_speed_kmh > self.max_plausible_speed_kmh:
+                        impossible_travel = True
+                        flags.append(
+                            f"IMPOSSIBLE_TRAVEL_SPEED ({calculated_speed_kmh} km/h > {self.max_plausible_speed_kmh} km/h)"
+                        )
+                        excess_ratio = (
+                            calculated_speed_kmh / self.max_plausible_speed_kmh
+                        )
+                        risk_score_speed = min(0.90, 0.50 + (excess_ratio - 1.0) * 0.15)
+                        risk_components.append(round(risk_score_speed, 3))
+
+        # Store location update
+        if user_id not in self.location_history:
+            self.location_history[user_id] = []
+        self.location_history[user_id].append(
+            {
+                "lat": lat,
+                "lon": lon,
+                "timestamp": now,
+            }
+        )
+        if len(self.location_history[user_id]) > 20:
+            self.location_history[user_id] = self.location_history[user_id][-20:]
+
+        # 2. Device Fingerprint Churn Check
+        device_churn = False
+        distinct_devices = 0
+        if device_fingerprint:
+            if user_id not in self.device_history:
+                self.device_history[user_id] = []
+
+            cutoff = now - self.device_churn_window_seconds
+            self.device_history[user_id] = [
+                (dev, ts) for dev, ts in self.device_history[user_id] if ts >= cutoff
+            ]
+            self.device_history[user_id].append((device_fingerprint, now))
+
+            unique_devs = {dev for dev, _ in self.device_history[user_id]}
+            distinct_devices = len(unique_devs)
+            if distinct_devices > self.max_allowed_devices_in_window:
+                device_churn = True
+                flags.append(
+                    f"HIGH_DEVICE_CHURN ({distinct_devices} distinct devices in 24h)"
+                )
+                risk_components.append(0.65)
+
+        # 3. Datacenter / VPN Anonymizer Check
+        if is_vpn_or_datacenter:
+            flags.append("DATACENTER_OR_ANONYMOUS_PROXY_DETECTED")
+            risk_components.append(0.35)
+
+        geo_risk_score = min(1.0, max(risk_components))
+
+        # Determine Severity Tier
+        if geo_risk_score >= 0.80:
+            tier = "CRITICAL_FRAUD"
+        elif geo_risk_score >= 0.60:
+            tier = "HIGH_RISK"
+        elif geo_risk_score >= 0.30:
+            tier = "SUSPICIOUS"
+        else:
+            tier = "LOW_RISK"
+
+        return {
+            "user_id": user_id,
+            "geo_risk_score": round(geo_risk_score, 4),
+            "severity_tier": tier,
+            "impossible_travel_detected": impossible_travel,
+            "calculated_speed_kmh": calculated_speed_kmh,
+            "distance_km": round(distance_km, 2),
+            "time_delta_seconds": round(time_delta_seconds, 2),
+            "device_churn_detected": device_churn,
+            "distinct_devices_count": distinct_devices,
+            "anomaly_flags": flags,
+        }
