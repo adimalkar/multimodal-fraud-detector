@@ -654,3 +654,144 @@ class DeviceGeoAnomalyDetector:
             "distinct_devices_count": distinct_devices,
             "anomaly_flags": flags,
         }
+
+
+class BehavioralRiskDecayEngine:
+    """
+    Applies temporal exponential half-life decay to past risk scores and infractions.
+    Provides calibrated risk rehabilitation based on elapsed time and subsequent verified clean events.
+    """
+
+    def __init__(
+        self,
+        default_half_life_days: float = 14.0,
+        residual_risk_floor: float = 0.05,
+        clean_event_discount_factor: float = 0.90,
+    ):
+        self.default_half_life_days = default_half_life_days
+        self.residual_risk_floor = residual_risk_floor
+        self.clean_event_discount_factor = clean_event_discount_factor
+        # entity_id -> {"peak_risk": float, "last_infraction_ts": float, "clean_events_since": int}
+        self.profiles: dict[str, dict[str, Any]] = {}
+
+    def record_infraction(
+        self,
+        entity_id: str,
+        risk_score: float,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Records a new risk infraction for an entity, updating their peak risk profile.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        score = min(1.0, max(0.0, float(risk_score)))
+
+        if entity_id not in self.profiles:
+            self.profiles[entity_id] = {
+                "peak_risk": score,
+                "last_infraction_ts": now,
+                "clean_events_since": 0,
+            }
+        else:
+            current_decayed = self.calculate_decayed_risk(entity_id, now)[
+                "decayed_risk_score"
+            ]
+            self.profiles[entity_id] = {
+                "peak_risk": max(score, current_decayed),
+                "last_infraction_ts": now,
+                "clean_events_since": 0,
+            }
+
+        return {
+            "entity_id": entity_id,
+            "recorded_risk": score,
+            "timestamp": now,
+            "clean_events_since": 0,
+        }
+
+    def record_clean_event(
+        self,
+        entity_id: str,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Records a verified benign transaction, accelerating risk rehabilitation.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        if entity_id in self.profiles:
+            self.profiles[entity_id]["clean_events_since"] += 1
+            count = self.profiles[entity_id]["clean_events_since"]
+        else:
+            count = 1
+
+        decay_info = self.calculate_decayed_risk(entity_id, now)
+        return {
+            "entity_id": entity_id,
+            "clean_events_count": count,
+            "decayed_risk_score": decay_info["decayed_risk_score"],
+        }
+
+    def calculate_decayed_risk(
+        self,
+        entity_id: str,
+        current_timestamp: float | None = None,
+        half_life_days: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Calculates time-decayed risk score using exponential half-life formula:
+        R(t) = R_floor + (R_peak - R_floor) * (0.5 ** (delta_days / half_life)) * (discount ** clean_events)
+        """
+        now = current_timestamp if current_timestamp is not None else time.time()
+        if entity_id not in self.profiles:
+            return {
+                "entity_id": entity_id,
+                "original_peak_risk": 0.0,
+                "decayed_risk_score": 0.0,
+                "days_elapsed": 0.0,
+                "half_life_days": half_life_days or self.default_half_life_days,
+                "clean_events_discount_applied": False,
+                "clean_events_count": 0,
+                "rehabilitation_complete": True,
+            }
+
+        profile = self.profiles[entity_id]
+        peak = profile["peak_risk"]
+        infraction_ts = profile["last_infraction_ts"]
+        clean_count = profile["clean_events_since"]
+
+        hl_days = (
+            half_life_days
+            if half_life_days is not None
+            else self.default_half_life_days
+        )
+        elapsed_seconds = max(0.0, now - infraction_ts)
+        elapsed_days = elapsed_seconds / 86400.0
+
+        # Base exponential decay
+        decay_factor = 0.5 ** (elapsed_days / max(0.001, hl_days))
+
+        # Clean event bonus discount
+        behavior_discount = self.clean_event_discount_factor**clean_count
+
+        excess_risk = max(0.0, peak - self.residual_risk_floor)
+        decayed = self.residual_risk_floor + (
+            excess_risk * decay_factor * behavior_discount
+        )
+        floor_limit = (
+            self.residual_risk_floor if peak >= self.residual_risk_floor else 0.0
+        )
+        final_decayed = min(peak, max(floor_limit, decayed))
+
+        # Check if rehabilitation reached floor
+        rehab_complete = final_decayed <= (self.residual_risk_floor + 0.005)
+
+        return {
+            "entity_id": entity_id,
+            "original_peak_risk": round(peak, 4),
+            "decayed_risk_score": round(final_decayed, 4),
+            "days_elapsed": round(elapsed_days, 2),
+            "half_life_days": hl_days,
+            "clean_events_discount_applied": clean_count > 0,
+            "clean_events_count": clean_count,
+            "rehabilitation_complete": rehab_complete,
+        }
