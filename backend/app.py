@@ -62,12 +62,14 @@ try:
     from backend.storage import (
         generate_presigned_upload_url,
         is_storage_configured,
+        is_allowed_media_url,
         download_file_stream
     )
 except ImportError:
     from storage import (
         generate_presigned_upload_url,
         is_storage_configured,
+        is_allowed_media_url,
         download_file_stream
     )
 
@@ -837,6 +839,9 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
     enforce_rate_limit(request)
     if not req.media_url:
         raise HTTPException(status_code=400, detail="media_url is required")
+
+    if not is_allowed_media_url(req.media_url):
+        raise HTTPException(status_code=403, detail="media_url must point to this deployment's configured storage")
 
     validate_file_extension(req.filename or "evidence.jpg")
     ensure_analysis_available()

@@ -55,6 +55,7 @@ def test_unconfigured_providers_reject_analysis_before_creating_jobs(client, mon
     assert readiness.status_code == 503
     assert readiness.json()["detail"]["code"] == "MODEL_PROVIDERS_UNCONFIGURED"
 
+    monkeypatch.setattr("backend.storage.S3_PUBLIC_DOMAIN", "https://example.com")
     image = image_bytes()
     requests = [
         client.post("/api/analyze", files={"file": ("claim.jpg", image, "image/jpeg")}),

@@ -86,7 +86,7 @@ When processing large videos (50MB–200MB) or PDFs, uploading directly to objec
    ```
 5. The backend automatically exposes:
    - `POST /api/storage/presigned-url`: Generates a direct presigned PUT upload URL.
-   - `POST /api/analyze-url`: Takes the public/presigned file URL and streams it in chunks.
+   - `POST /api/analyze-url`: Takes the public/presigned file URL and streams it in chunks. Only URLs on the configured `S3_ENDPOINT_URL`/`R2_ENDPOINT_URL` or `S3_PUBLIC_DOMAIN` origin are accepted, redirects are not followed, and every URL is refused when neither is set.
 
 *Note: If R2 is not configured, the backend automatically falls back to direct multipart upload via `POST /api/analyze`.*
 

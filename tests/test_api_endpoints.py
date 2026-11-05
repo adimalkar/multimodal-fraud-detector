@@ -70,7 +70,8 @@ def test_storage_presigned_url_endpoint(client):
     assert "storage_configured" in data
     assert "key" in data
 
-def test_analyze_url_endpoint(client):
+def test_analyze_url_endpoint(client, monkeypatch):
+    monkeypatch.setattr("backend.storage.S3_PUBLIC_DOMAIN", "https://example.com")
     response = client.post(
         "/api/analyze-url",
         json={"media_url": "https://example.com/test.jpg", "filename": "test.jpg"}
