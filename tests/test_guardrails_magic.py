@@ -45,3 +45,15 @@ def test_magic_bytes_mismatch_extension():
     valid, reason = validate_file_magic_bytes(b"\xff\xd8\xff\xe0\x00\x10", "pdf")
     assert not valid
     assert "Header magic mismatch" in reason
+
+
+def test_magic_bytes_mov_and_avi_are_checked():
+    assert validate_file_magic_bytes(b"\x00\x00\x00\x14ftypqt  \x00\x00", "mov")[0]
+    assert validate_file_magic_bytes(b"\x00\x00\x00\x08wide\x00\x00\x00\x00", "mov")[0]
+    assert validate_file_magic_bytes(b"\x00\x00\x10\x00moov\x00\x00\x00\x00", "mov")[0]
+    assert validate_file_magic_bytes(b"RIFF\x24\x00\x00\x00AVI LIST", "avi")[0]
+
+    assert not validate_file_magic_bytes(b"plain text pretending", "mov")[0]
+    assert not validate_file_magic_bytes(b"plain text pretending", "avi")[0]
+    assert not validate_file_magic_bytes(b"RIFF\x24\x00\x00\x00WEBPVP8 ", "avi")[0]
+    assert not validate_file_magic_bytes(b"MZ\x90\x00\x03\x00\x00\x00", "avi")[0]

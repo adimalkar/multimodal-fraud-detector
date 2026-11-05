@@ -61,7 +61,7 @@ def test_reject_unsupported_batch_file_extension():
 def test_reject_exceeding_max_batch_size():
     files = []
     for i in range(MAX_BATCH_SIZE + 2):
-        files.append(("files", (f"file_{i}.jpg", io.BytesIO(b"data"), "image/jpeg")))
+        files.append(("files", (f"file_{i}.jpg", io.BytesIO(b"\xff\xd8\xff\xe0data"), "image/jpeg")))
 
     response = client.post("/api/batch/analyze", files=files)
     assert response.status_code == 400
@@ -99,21 +99,21 @@ def test_rate_limit_http_429():
         # 1st request
         r1 = client.post(
             "/api/analyze",
-            files={"file": ("test1.jpg", io.BytesIO(b"fake data 1"), "image/jpeg")}
+            files={"file": ("test1.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake data 1"), "image/jpeg")}
         )
         assert r1.status_code == 200
 
         # 2nd request
         r2 = client.post(
             "/api/analyze",
-            files={"file": ("test2.jpg", io.BytesIO(b"fake data 2"), "image/jpeg")}
+            files={"file": ("test2.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake data 2"), "image/jpeg")}
         )
         assert r2.status_code == 200
 
         # 3rd request -> HTTP 429
         r3 = client.post(
             "/api/analyze",
-            files={"file": ("test3.jpg", io.BytesIO(b"fake data 3"), "image/jpeg")}
+            files={"file": ("test3.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake data 3"), "image/jpeg")}
         )
         assert r3.status_code == 429
         assert "Rate limit exceeded" in r3.json()["detail"]

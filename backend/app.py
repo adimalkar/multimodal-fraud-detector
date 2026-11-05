@@ -26,6 +26,8 @@ try:
         enforce_rate_limit,
         validate_file_extension,
         validate_file_size,
+        validate_file_content,
+        validate_header_bytes,
         validate_batch_size,
         rate_limiter,
         MAX_FILE_SIZE_MB,
@@ -37,6 +39,8 @@ except ImportError:
         enforce_rate_limit,
         validate_file_extension,
         validate_file_size,
+        validate_file_content,
+        validate_header_bytes,
         validate_batch_size,
         rate_limiter,
         MAX_FILE_SIZE_MB,
@@ -634,6 +638,10 @@ async def run_analysis_pipeline_from_url(job_id: str, media_url: str, media_type
         jobs[job_id]["stage"] = "Streaming media file into memory-efficient buffer..."
         jobs[job_id]["progress"] = 20
         await download_file_stream(media_url, file_path)
+        with open(file_path, "rb") as downloaded:
+            problem = validate_header_bytes(downloaded.read(32), filename)
+        if problem:
+            raise ValueError(problem)
 
         # Offload CPU-heavy pipeline to thread pool
         loop = asyncio.get_event_loop()
@@ -758,6 +766,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
             raise HTTPException(status_code=400, detail="No file provided")
         validate_file_extension(file.filename)
         validate_file_size(file)
+        validate_file_content(file)
         if evidence_pipeline_version(file) == SCHEMA_VERSION:
             await asyncio.to_thread(ensure_analysis_available)
         job = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, [file])
@@ -773,6 +782,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    validate_file_content(file)
     ensure_analysis_available()
 
     cleanup_old_jobs()
@@ -913,6 +923,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
         for file in files:
             validate_file_extension(file.filename)
             validate_file_size(file)
+            validate_file_content(file)
         if any(evidence_pipeline_version(file) == SCHEMA_VERSION for file in files):
             await asyncio.to_thread(ensure_analysis_available)
         if len(files) == 1:
@@ -933,6 +944,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
     for f in valid_files:
         validate_file_extension(f.filename)
         validate_file_size(f)
+        validate_file_content(f)
     ensure_analysis_available()
 
     cleanup_old_jobs()
@@ -1057,6 +1069,7 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    validate_file_content(file)
     ensure_analysis_available()
 
     file_id = str(uuid.uuid4())
