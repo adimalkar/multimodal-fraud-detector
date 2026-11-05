@@ -2,26 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--lightbox);
+  color: var(--carbon);
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+:focus-visible {
+  outline: 2px solid var(--uv);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .wrap {
+    @apply mx-auto w-full max-w-[1240px] px-4 md:px-8;
+  }
+  .display {
+    font-family: var(--font-display);
+    font-stretch: 72%;
+    font-weight: 750;
+    letter-spacing: -0.012em;
+    line-height: 0.96;
+  }
+  .label {
+    font-family: var(--font-data);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--graphite);
+  }
+  .tag {
+    @apply inline-flex h-6 min-w-6 items-center justify-center bg-marker px-1.5 text-carbon;
+    font-family: var(--font-data);
+    font-size: 0.8125rem;
+    font-weight: 700;
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  }
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 px-5 font-body text-base font-bold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-carbon text-paper hover:bg-uv-field;
+  }
+  .btn-quiet {
+    @apply btn border border-carbon text-carbon hover:bg-carbon hover:text-paper;
+  }
+  .sheet {
+    @apply border border-rule bg-paper;
+  }
+  .field {
+    @apply min-h-11 w-full border border-rule bg-paper px-3 font-data text-sm text-carbon placeholder:text-graphite/70 focus:border-uv focus:outline-none;
+  }
+}
+
+/* Ruler ticks along the top of the light table: an ABFO-style forensic scale. */
+.ruler {
+  height: 14px;
+  background-image:
+    repeating-linear-gradient(to right, var(--carbon) 0 1px, transparent 1px 100px),
+    repeating-linear-gradient(to right, var(--carbon) 0 1px, transparent 1px 50px),
+    repeating-linear-gradient(to right, var(--graphite) 0 1px, transparent 1px 10px);
+  background-size: 100% 14px, 100% 10px, 100% 5px;
+  background-repeat: repeat-x;
+  background-position: top left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

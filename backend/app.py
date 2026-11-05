@@ -26,6 +26,8 @@ try:
         enforce_rate_limit,
         validate_file_extension,
         validate_file_size,
+        validate_file_content,
+        validate_header_bytes,
         validate_batch_size,
         rate_limiter,
         MAX_FILE_SIZE_MB,
@@ -37,6 +39,8 @@ except ImportError:
         enforce_rate_limit,
         validate_file_extension,
         validate_file_size,
+        validate_file_content,
+        validate_header_bytes,
         validate_batch_size,
         rate_limiter,
         MAX_FILE_SIZE_MB,
@@ -87,9 +91,11 @@ except ImportError:
 try:
     from backend.risk_scorer import MultimodalRiskScorer
     from backend.metadata_extractor import extract_metadata
+    from backend.claim_signals import ClaimSignalsRequest, evaluate_claim_signals
 except ImportError:
     from risk_scorer import MultimodalRiskScorer
     from metadata_extractor import extract_metadata
+    from claim_signals import ClaimSignalsRequest, evaluate_claim_signals
 
 risk_scorer_engine = MultimodalRiskScorer()
 single_model_risk_scorer = MultimodalRiskScorer(
@@ -636,6 +642,10 @@ async def run_analysis_pipeline_from_url(job_id: str, media_url: str, media_type
         jobs[job_id]["stage"] = "Streaming media file into memory-efficient buffer..."
         jobs[job_id]["progress"] = 20
         await download_file_stream(media_url, file_path)
+        with open(file_path, "rb") as downloaded:
+            problem = validate_header_bytes(downloaded.read(32), filename)
+        if problem:
+            raise ValueError(problem)
 
         # Offload CPU-heavy pipeline to thread pool
         loop = asyncio.get_event_loop()
@@ -674,6 +684,7 @@ def root():
             "submit_upload_job": "POST /api/analyze",
             "submit_batch_job": "POST /api/batch/analyze",
             "submit_url_job": "POST /api/analyze-url",
+            "claim_signals": "POST /api/claims/signals",
             "job_status": "GET /api/jobs/{job_id}",
             "batch_status": "GET /api/batch/{batch_id}",
             "analytics_stats": "GET /api/analytics/stats",
@@ -760,6 +771,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
             raise HTTPException(status_code=400, detail="No file provided")
         validate_file_extension(file.filename)
         validate_file_size(file)
+        validate_file_content(file)
         if evidence_pipeline_version(file) == SCHEMA_VERSION:
             await asyncio.to_thread(ensure_analysis_available)
         job = await asyncio.to_thread(durable_enqueue, background_tasks, request, owner_id, [file])
@@ -775,6 +787,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    validate_file_content(file)
     ensure_analysis_available()
 
     cleanup_old_jobs()
@@ -918,6 +931,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
         for file in files:
             validate_file_extension(file.filename)
             validate_file_size(file)
+            validate_file_content(file)
         if any(evidence_pipeline_version(file) == SCHEMA_VERSION for file in files):
             await asyncio.to_thread(ensure_analysis_available)
         if len(files) == 1:
@@ -938,6 +952,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
     for f in valid_files:
         validate_file_extension(f.filename)
         validate_file_size(f)
+        validate_file_content(f)
     ensure_analysis_available()
 
     cleanup_old_jobs()
@@ -1062,6 +1077,7 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
 
     validate_file_extension(file.filename)
     validate_file_size(file)
+    validate_file_content(file)
     ensure_analysis_available()
 
     file_id = str(uuid.uuid4())
@@ -1083,6 +1099,16 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
                 os.remove(file_path)
             except Exception:
                 pass
+
+@app.post("/api/claims/signals")
+def claim_signals(req: ClaimSignalsRequest, request: Request):
+    """Run the claim-level scoring engines on caller-supplied rows. Nothing is stored."""
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+    enforce_rate_limit(request)
+    if req.is_empty():
+        raise HTTPException(status_code=400, detail="Add at least one event, entity, finding or score")
+    return evaluate_claim_signals(req)
 
 # Analytics & Reporting endpoints
 @app.get("/api/analytics/stats")

@@ -177,6 +177,11 @@ DANGEROUS_EXECUTABLE_SIGNATURES = [
 ]
 
 
+QUICKTIME_LEADING_BOXES = {b"ftyp", b"moov", b"mdat", b"wide", b"free", b"skip", b"pnot"}
+HEADER_BYTES_TO_INSPECT = 32
+MIN_IDENTIFIABLE_BYTES = 4
+
+
 def validate_file_magic_bytes(header_bytes: bytes, declared_ext: str) -> tuple[bool, str]:
     """
     Validates file magic byte headers against the declared file extension.
@@ -223,4 +228,34 @@ def validate_file_magic_bytes(header_bytes: bytes, declared_ext: str) -> tuple[b
             return True, "video/mp4"
         return False, "Header magic mismatch: Expected MP4 ftyp container box signature"
 
-    return True, "valid"
+    if ext == "mov":
+        # Older QuickTime files can open with a box other than ftyp.
+        if len(header_bytes) >= 8 and header_bytes[4:8] in QUICKTIME_LEADING_BOXES:
+            return True, "video/quicktime"
+        return False, "Header magic mismatch: Expected QuickTime container box signature"
+
+    if ext == "avi":
+        if header_bytes.startswith(b"RIFF") and len(header_bytes) >= 12 and header_bytes[8:12] == b"AVI ":
+            return True, "video/x-msvideo"
+        return False, "Header magic mismatch: Expected RIFF/AVI signature"
+
+    return False, f"No content signature is defined for .{ext} files"
+
+
+def validate_header_bytes(header_bytes: bytes, filename: str) -> str | None:
+    """Return why this content can't be accepted for this filename, or None if it can."""
+    if len(header_bytes) < MIN_IDENTIFIABLE_BYTES:
+        return f"File '{filename}' is too short to be a valid media file."
+    extension = filename.rsplit(".", 1)[-1] if "." in filename else ""
+    valid, reason = validate_file_magic_bytes(header_bytes, extension)
+    return None if valid else f"File '{filename}' failed content inspection. {reason}"
+
+
+def validate_file_content(file: UploadFile):
+    """Raises HTTP 415 when an upload's bytes don't match its extension. Rewinds the stream."""
+    file.file.seek(0)
+    header = file.file.read(HEADER_BYTES_TO_INSPECT)
+    file.file.seek(0)
+    problem = validate_header_bytes(header, file.filename or "")
+    if problem:
+        raise HTTPException(status_code=415, detail=problem)
