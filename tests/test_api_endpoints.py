@@ -34,7 +34,7 @@ def test_analyze_empty_file_validation(client):
     assert response.status_code in [400, 422]
 
 def test_create_and_poll_job(client):
-    test_image = io.BytesIO(b"fake image data")
+    test_image = io.BytesIO(b"\xff\xd8\xff\xe0fake image data")
     response = client.post(
         "/api/analyze",
         files={"file": ("claim_photo.jpg", test_image, "image/jpeg")}
@@ -95,8 +95,8 @@ def test_analytics_csv_export(client):
     assert "File Name" in response.text
 
 def test_batch_analyze_and_poll_status(client):
-    file1 = ("image1.jpg", io.BytesIO(b"file 1 dummy data"), "image/jpeg")
-    file2 = ("document2.pdf", io.BytesIO(b"file 2 dummy pdf"), "application/pdf")
+    file1 = ("image1.jpg", io.BytesIO(b"\xff\xd8\xff\xe0file 1 dummy data"), "image/jpeg")
+    file2 = ("document2.pdf", io.BytesIO(b"%PDF-1.7 file 2 dummy pdf"), "application/pdf")
 
     response = client.post(
         "/api/batch/analyze",
