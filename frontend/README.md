@@ -1,84 +1,32 @@
-# AI Landing Page - Stunning, Responsive & Animated
+# FraudSight frontend
 
-<p style="text-align: center;">
-    <a href="https://www.pedroestevao.com">
-        <img src="https://res.cloudinary.com/dge3g9rcw/image/upload/v1747589615/github/b72tltyujl1wfe15oc70.webp" alt="Illustrative image" />
-    </a>
-</p>
+Next.js 14 app for the FraudSight evidence screening engine: the landing page plus the workspace where claims teams screen files, read reports, review history and run claim-level signals.
 
-A pixel-perfect **AI-themed marketing landing page** built with **React**, **Next.js 14 (App Router)**, **Tailwind CSS**, and **Framer Motion**. 100 % responsive, production-ready, and packed with smooth micro-interactions to captivate your visitors.
+| Route | Purpose |
+| --- | --- |
+| `/` | Landing page |
+| `/analyze` | Upload one file or a batch |
+| `/analyze/job/[id]` | Live progress and the screening report |
+| `/analyze/batch/[id]` | Batch progress and results, highest scores first |
+| `/analytics` | History, score bands and CSV export |
+| `/signals` | Claim-level checks: timing, travel, shared identifiers, signal conflict and past findings |
 
-## Key Features
-
-- **Instant load** – Optimized images & Next.js dynamic imports
-- **Fully responsive** – Mobile-first layout that scales to 4K
-- **Framer Motion animations** – Hero reveal, logo ticker, parallax mockups, fade-in testimonials, and more
-- **Reusable components** – Header, Button, Section, TestimonialCard, etc.
-- **Static & dynamic images** – Next `<Image>` component with blur placeholders
-
-## Tech Stack
-
-The project was built using the following technologies and tools:
-
-- [Next.js (App Router)](https://nextjs.org/) - React framework for web applications.
-- [React](https://react.dev/) - JavaScript library for building user interfaces.
-- [TypeScript](https://www.typescriptlang.org/) - JavaScript superset for static typing.
-- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework for fast and customizable design.
-- [Motion](https://motion.dev/) - A robust animation library for modern web projects using JavaScript, React, or Vue.
-
-## Figma Design
-
-- [AI Startup Landing Page — Frontend Tribe](https://www.figma.com/design/vln3nOGGr36JKPsIFdQMU4/AI-Startup-Landing-Page-%E2%80%94-Frontend-Tribe?node-id=4007-681&p=f&t=jrDYhgDNS5C70BRL-0)
-
-## Setup & Installation
-
-### 1. Clone the repository
+## Run it
 
 ```bash
-git clone https://github.com/pedroestevaodev/stunning-ia-lp.git
-cd stunning-ia-lp
+cp .env.local.example .env.local   # points at http://localhost:8000
+npm ci
+npm run dev
 ```
 
-### 2. Install dependencies
+Start the backend from the repository root with `uvicorn backend.app:app --reload`. Without `NEXT_PUBLIC_API_URL`, the app uses the hosted Render API.
 
-```bash
-$ npm install
-```
+## Design rules
 
-### 3. Start the development server
+- Colour carries meaning: carbon for people and decisions, UV violet for anything the machine observed, yellow tags for exhibits that cross-reference a finding.
+- Score bands are ordered, so they share one hue from light to dark. Status colours describe the system, never a claim.
+- The interface never presents a score as a verdict. Engine values such as `CRITICAL_FRAUD` are mapped to plain labels in `lib/format.ts`.
+- A skipped check must read as skipped, never as passed.
+- Don't add stats, logos or testimonials that aren't real.
 
-```bash
-$ npm run dev
-```
-
-Open your browser and visit `http://localhost:3000` to see the project in action.
-
-You can start editing the homepage by modifying the `app/page.tsx` file. The browser will automatically update as you make changes to the code.
-
-## Available Commands
-
-Here are the main commands available for the project:
-
-| Command          | Description                   |
-| ---------------- | ----------------------------- |
-| `dev`       | Starts the development server |
-| `build`     | Builds the app for production |
-| `start`     | Runs the built app            |
-| `lint`      | Lints the code using ESLint   |
-
-## Deploy
-
-The easiest way to deploy your Next.js application is by using the [Vercel Platform](https://vercel.com/new), created by the developers of Next.js.
-
-Check out the [Next.js deployment documentation](https://nextjs.org/docs/deployment) for more details.
-
-## License
-
-This project is open source and available under the [MIT License](https://mit-license.org/).  
-<br />
-
----
-
-<br />
-
-**Built with ☕ by [Pedro Estevão](https://www.pedroestevao.com)**
+The bundled `LICENSE` covers the MIT-licensed template this project started from.

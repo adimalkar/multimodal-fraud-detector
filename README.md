@@ -105,7 +105,7 @@ python -m ruff check . --select=E9,F63,F7,F82
 
 ## API and deployment
 
-The main legacy-compatible API uses `POST /api/analyze`, `GET /api/jobs/{job_id}`, `POST /api/batch/analyze`, `GET /api/batch/{batch_id}`, `GET /api/health`, and `GET /api/ready`. The durable path retains these job endpoints with authenticated, tenant-scoped reads and versioned internal queues. Its production mode disables routes that would bypass ownership, including arbitrary URL intake, public presigned uploads, synchronous analysis, and global analytics. Inspect `/docs` on the running service for its actual enabled contract.
+The main legacy-compatible API uses `POST /api/analyze`, `GET /api/jobs/{job_id}`, `POST /api/batch/analyze`, `GET /api/batch/{batch_id}`, `POST /api/claims/signals` (stateless claim-level checks: timing, travel, shared identifiers, signal conflict, past findings), `GET /api/health`, and `GET /api/ready`. The durable path retains these job endpoints with authenticated, tenant-scoped reads and versioned internal queues. Its production mode disables routes that would bypass ownership, including arbitrary URL intake, public presigned uploads, synchronous analysis, and global analytics. Inspect `/docs` on the running service for its actual enabled contract.
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) and the [durable backend rollout guide](docs/PHASE1_DURABLE_BACKEND.md) before changing hosting settings. The checked-in `render.yaml` describes a web service; it does not provision the PostgreSQL database, private bucket, or separate durable worker. A successful frontend preview or container build does not establish that the public site runs these opt-in branches.
 

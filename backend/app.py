@@ -89,9 +89,11 @@ except ImportError:
 try:
     from backend.risk_scorer import MultimodalRiskScorer
     from backend.metadata_extractor import extract_metadata
+    from backend.claim_signals import ClaimSignalsRequest, evaluate_claim_signals
 except ImportError:
     from risk_scorer import MultimodalRiskScorer
     from metadata_extractor import extract_metadata
+    from claim_signals import ClaimSignalsRequest, evaluate_claim_signals
 
 risk_scorer_engine = MultimodalRiskScorer()
 single_model_risk_scorer = MultimodalRiskScorer(
@@ -680,6 +682,7 @@ def root():
             "submit_upload_job": "POST /api/analyze",
             "submit_batch_job": "POST /api/batch/analyze",
             "submit_url_job": "POST /api/analyze-url",
+            "claim_signals": "POST /api/claims/signals",
             "job_status": "GET /api/jobs/{job_id}",
             "batch_status": "GET /api/batch/{batch_id}",
             "analytics_stats": "GET /api/analytics/stats",
@@ -1091,6 +1094,16 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
                 os.remove(file_path)
             except Exception:
                 pass
+
+@app.post("/api/claims/signals")
+def claim_signals(req: ClaimSignalsRequest, request: Request):
+    """Run the claim-level scoring engines on caller-supplied rows. Nothing is stored."""
+    if DURABLE_JOBS_ENABLED:
+        require_tenant(request)
+    enforce_rate_limit(request)
+    if req.is_empty():
+        raise HTTPException(status_code=400, detail="Add at least one event, entity, finding or score")
+    return evaluate_claim_signals(req)
 
 # Analytics & Reporting endpoints
 @app.get("/api/analytics/stats")
