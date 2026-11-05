@@ -321,6 +321,38 @@ def test_video_structure_version_has_own_queue_retry_and_no_model(client, tmp_pa
     assert store.get(job_id, "tenant-a")["billing_started"] == 0
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+                    reason="FFmpeg system binaries unavailable")
+def test_video_sampling_version_has_own_queue_and_no_model(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("VIDEO_EVIDENCE_PIPELINE_ENABLED", "1")
+    monkeypatch.setenv("VIDEO_SAMPLING_PIPELINE_ENABLED", "1")
+    monkeypatch.setattr(app_module, "missing_model_credentials", lambda: ["OPENROUTER_API_KEY"])
+    monkeypatch.setattr(app_module, "execute_agent_analysis",
+                        lambda *_: pytest.fail("Video sampling called model"))
+    data = video_bytes(tmp_path)
+    files = {"file": ("clip.mp4", data, "video/mp4")}
+    request_headers = headers(**{"Idempotency-Key": "video-sampling-version"})
+    submitted = client.post("/api/analyze", headers=request_headers, files=files)
+    assert submitted.status_code == 200
+    job_id = submitted.json()["job_id"]
+    store, artifacts = app_module.durable_components()
+    assert store.get(job_id, "tenant-a")["status"] == "queued_video_v2"
+    assert store.get(job_id, "tenant-a")["pipeline_version"] == "video-evidence-v2"
+    assert client.get(f"/api/jobs/{job_id}", headers=headers()).json()["status"] == "queued"
+    monkeypatch.setenv("VIDEO_SAMPLING_PIPELINE_ENABLED", "0")
+    assert client.post("/api/analyze", headers=request_headers, files=files).status_code == 409
+    assert run_once(store, artifacts)
+    completed = client.get(f"/api/jobs/{job_id}", headers=headers()).json()
+    assert completed["status"] == "completed"
+    assert completed["pipeline_version"] == "video-evidence-v2"
+    sampling = next(item for item in completed["result"]["task_results"]
+                    if item["task"] == "video_sampling")
+    assert sampling["coverage"]["frames_read"] == 3, sampling
+    assert completed["result"]["classification"] == "Unknown"
+    assert completed["result"]["model_usage"] == {"cost": 0.0, "calls": 0}
+    assert store.get(job_id, "tenant-a")["billing_started"] == 0
+
+
 def test_pdf_idempotency_cannot_replay_across_pipeline_versions(client, monkeypatch):
     data = pdf_bytes()
     files = {"file": ("invoice.pdf", data, "application/pdf")}
