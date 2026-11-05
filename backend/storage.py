@@ -1,7 +1,8 @@
 import os
 import uuid
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
+from urllib.parse import urlsplit
 
 # Environment variables for S3 / Cloudflare R2 / Supabase Storage
 S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL") or os.environ.get("R2_ENDPOINT_URL")
@@ -13,6 +14,35 @@ S3_PUBLIC_DOMAIN = os.environ.get("S3_PUBLIC_DOMAIN")
 def is_storage_configured() -> bool:
     """Returns True if object storage credentials are configured."""
     return bool(S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY and S3_ENDPOINT_URL)
+
+def _origin(url: str) -> Optional[Tuple[str, str, int]]:
+    """Return (scheme, host, port), or None for anything that isn't a plain web URL.
+
+    Whitespace, control characters and backslashes are refused outright: urlsplit
+    drops some of them, so it could read a different host than a client would reach.
+    """
+    if any(ord(char) <= 32 or char == "\\" for char in url):
+        return None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        return None
+    if parts.username is not None or parts.password is not None:
+        return None
+    return parts.scheme, parts.hostname, port or (443 if parts.scheme == "https" else 80)
+
+
+def is_allowed_media_url(url: str) -> bool:
+    """True only for this deployment's own storage: an exact scheme, host and port match."""
+    allowed = {
+        _origin(value if "://" in value else f"https://{value}")
+        for value in (S3_ENDPOINT_URL, S3_PUBLIC_DOMAIN) if value
+    } - {None}
+    return _origin(url) in allowed
+
 
 def get_s3_client():
     """Lazily initialize and return boto3 S3 client."""
@@ -79,10 +109,12 @@ async def download_file_stream(url: str, destination_path: str, max_size_mb: int
     max_bytes = max_size_mb * 1024 * 1024
     downloaded = 0
 
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+    # Redirects stay off: one could send the fetch past is_allowed_media_url.
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=False) as client:
         async with client.stream("GET", url) as response:
             if response.status_code != 200:
-                raise Exception(f"Failed to fetch file from {url}: HTTP {response.status_code}")
+                # The URL can be presigned, and this message reaches the job's public error field.
+                raise Exception(f"Failed to fetch file from storage: HTTP {response.status_code}")
 
             with open(destination_path, "wb") as f:
                 async for chunk in response.aiter_bytes(chunk_size=1024 * 64):
