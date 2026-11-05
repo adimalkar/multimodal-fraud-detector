@@ -20,7 +20,7 @@ export const TIER_BG: Record<TierKey, string> = {
 	elevated: "bg-tier-elevated",
 	high: "bg-tier-high",
 	critical: "bg-tier-critical",
-	none: "bg-graphite",
+	none: "bg-muted",
 };
 
 const ACTIONS: Record<string, string> = {

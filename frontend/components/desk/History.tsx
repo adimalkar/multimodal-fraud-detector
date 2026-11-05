@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { type AnalyticsSummary, ApiError, downloadFile, request } from "@/lib/api";
 import { dateTime, score100, TIER_BG, type TierKey, tierOf, titleCase } from "@/lib/format";
 import Notice from "./Notice";
+import Page from "./Page";
 import PageTitle from "./PageTitle";
 
 const BANDS: Array<{ key: TierKey; label: string; field: keyof NonNullable<AnalyticsSummary["severity_breakdown"]> }> = [
@@ -20,7 +21,7 @@ const TierBar = ({ counts }: { counts: NonNullable<AnalyticsSummary["severity_br
 		<div>
 			<h2 className="label mb-3">Files by score band</h2>
 			{total === 0 ? (
-				<p className="text-graphite">No scored files yet.</p>
+				<p className="text-muted">No scored files yet.</p>
 			) : (
 				<>
 					<div className="flex h-5 gap-0.5" role="img" aria-label={BANDS.map((band) => `${band.label}: ${counts[band.field]}`).join(", ")}>
@@ -36,7 +37,7 @@ const TierBar = ({ counts }: { counts: NonNullable<AnalyticsSummary["severity_br
 					<ul className="mt-3 flex flex-wrap gap-x-6 gap-y-1">
 						{BANDS.map((band) => (
 							<li key={band.key} className="flex items-center gap-2">
-								<span aria-hidden="true" className={`h-3 w-3 ${TIER_BG[band.key]}`} />
+								<span aria-hidden="true" className={`h-3 w-3 rounded-sm ${TIER_BG[band.key]}`} />
 								{band.label}
 								<span className="font-data font-bold">{counts[band.field]}</span>
 							</li>
@@ -77,7 +78,7 @@ const History = () => {
 	};
 
 	return (
-		<div className="max-w-6xl">
+		<Page>
 			<PageTitle
 				title="History"
 				lede="The 25 most recent screenings, newest first. Export the CSV for the full record."
@@ -89,11 +90,11 @@ const History = () => {
 			/>
 			{exportError && <div className="mb-5"><Notice tone="error" title="The export failed">{exportError}</Notice></div>}
 			{error && <Notice tone="error" title="History couldn’t be loaded">{error}</Notice>}
-			{!data && !error && <p role="status" className="text-graphite">Loading history…</p>}
+			{!data && !error && <p role="status" className="text-muted">Loading history…</p>}
 			{data && data.total_records === 0 && (
 				<div className="sheet p-8">
 					<p className="text-xl font-bold">Nothing screened yet</p>
-					<p className="mt-1 text-graphite">Finished screenings appear here.</p>
+					<p className="mt-1 text-muted">Finished screenings appear here.</p>
 					<Link href="/analyze" className="btn-primary mt-4">Screen a file</Link>
 				</div>
 			)}
@@ -110,8 +111,8 @@ const History = () => {
 								["Average time", `${data.avg_processing_time_sec}s`],
 								["Storage", data.database_engine ?? "–"],
 							].map(([label, value]) => (
-								<div key={label} className="flex justify-between gap-3 border-b border-rule pb-1">
-									<dt className="text-graphite">{label}</dt>
+								<div key={label} className="flex justify-between gap-3 border-b border-line pb-1">
+									<dt className="text-muted">{label}</dt>
 									<dd className="font-bold">{value}</dd>
 								</div>
 							))}
@@ -121,7 +122,7 @@ const History = () => {
 						<table className="w-full min-w-[720px] border-collapse text-left">
 							<caption className="sr-only">The 25 most recent screenings</caption>
 							<thead>
-								<tr className="border-b-2 border-carbon">
+								<tr className="border-b border-line">
 									{["File", "Type", "Score", "Band", "Screened"].map((heading) => (
 										<th key={heading} scope="col" className="label px-4 py-2.5 font-normal">{heading}</th>
 									))}
@@ -131,20 +132,20 @@ const History = () => {
 								{data.recent_evaluations.map((row) => {
 									const tier = tierOf(row.severity_tier);
 									return (
-										<tr key={row.id} className="border-b border-rule align-top">
+										<tr key={row.id} className="border-b border-line align-top">
 											<th scope="row" className="max-w-xs px-4 py-3 font-normal">
 												<span className="block truncate font-data text-sm">{row.filename}</span>
-												{row.final_reasoning && <span className="mt-0.5 line-clamp-2 block text-sm leading-snug text-graphite">{row.final_reasoning}</span>}
+												{row.final_reasoning && <span className="mt-0.5 line-clamp-2 block text-sm leading-snug text-muted">{row.final_reasoning}</span>}
 											</th>
 											<td className="px-4 py-3">{titleCase(row.media_type || "–")}</td>
 											<td className="px-4 py-3 font-data font-bold">{score100(row.risk_score)}</td>
 											<td className="whitespace-nowrap px-4 py-3">
 												<span className="flex items-center gap-2">
-													<span aria-hidden="true" className={`h-2.5 w-2.5 ${TIER_BG[tier.key]}`} />
+													<span aria-hidden="true" className={`h-2.5 w-2.5 rounded-sm ${TIER_BG[tier.key]}`} />
 													{tier.label}
 												</span>
 											</td>
-											<td className="whitespace-nowrap px-4 py-3 text-sm text-graphite">{dateTime(row.processed_at)}</td>
+											<td className="whitespace-nowrap px-4 py-3 text-sm text-muted">{dateTime(row.processed_at)}</td>
 										</tr>
 									);
 								})}
@@ -153,7 +154,7 @@ const History = () => {
 					</div>
 				</>
 			)}
-		</div>
+		</Page>
 	);
 };
 

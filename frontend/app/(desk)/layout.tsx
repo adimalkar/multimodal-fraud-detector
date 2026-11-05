@@ -1,5 +1,5 @@
-import DeskShell from "@/components/desk/DeskShell";
+import WorkspaceShell from "@/components/desk/WorkspaceShell";
 
-const DeskLayout = ({ children }: { children: React.ReactNode }) => <DeskShell>{children}</DeskShell>;
+const DeskLayout = ({ children }: { children: React.ReactNode }) => <WorkspaceShell>{children}</WorkspaceShell>;
 
 export default DeskLayout;

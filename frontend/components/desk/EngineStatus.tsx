@@ -5,7 +5,7 @@ import { API_URL, getAccessToken, setAccessToken } from "@/lib/api";
 import { type EngineState, useEngine } from "./useEngine";
 
 const COPY: Record<EngineState, { dot: string; title: string; hint?: string }> = {
-	checking: { dot: "bg-graphite", title: "Checking engine" },
+	checking: { dot: "bg-muted", title: "Checking engine" },
 	waking: {
 		dot: "bg-marker",
 		title: "Waking the engine",
@@ -33,47 +33,51 @@ const EngineStatus = () => {
 	const { state, health, refresh } = useEngine();
 	const [token, setToken] = useState("");
 	const [open, setOpen] = useState(false);
+	const [panel, setPanel] = useState(false);
 	const copy = COPY[state];
 	const durable = health?.job_backend === "durable" || state === "needs-token";
 
 	return (
-		<div className="text-sm">
-			<p className="flex items-center gap-2 font-bold" role="status">
-				<span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${copy.dot}`} />
-				{copy.title}
-			</p>
-			{copy.hint && <p className="mt-1 leading-snug text-graphite">{copy.hint}</p>}
-			{durable && (
-				<div className="mt-2">
-					<button type="button" className="underline hover:text-uv" onClick={() => setOpen(!open)} aria-expanded={open}>
-						{getAccessToken() ? "Change access token" : "Add access token"}
-					</button>
-					{open && (
-						<form
-							className="mt-2 grid gap-2"
-							onSubmit={(event) => {
-								event.preventDefault();
-								setAccessToken(token.trim());
-								setToken("");
-								setOpen(false);
-								refresh();
-							}}
-						>
-							<label className="label" htmlFor="engine-token">Access token</label>
-							<input
-								id="engine-token"
-								type="password"
-								autoComplete="off"
-								value={token}
-								onChange={(event) => setToken(event.target.value)}
-								className="field"
-							/>
-							<button type="submit" className="btn-quiet !min-h-9 text-sm">Save for this tab</button>
-						</form>
+		<div className="relative text-sm">
+			<button
+				type="button"
+				onClick={() => setPanel(!panel)}
+				aria-expanded={panel}
+				className="flex min-h-10 items-center gap-2 rounded-full border border-line px-3 text-muted transition-colors hover:text-ink"
+			>
+				<span aria-hidden="true" className={`h-2 w-2 rounded-full ${copy.dot}`} />
+				<span role="status">{copy.title}</span>
+			</button>
+			{panel && (
+				<div className="sheet absolute right-0 top-12 z-40 w-72 p-4 shadow-2xl">
+					{copy.hint && <p className="mb-3 leading-snug text-muted">{copy.hint}</p>}
+					<p className="label">Connected to</p>
+					<p className="mt-0.5 break-all font-data text-xs">{API_URL.replace(/^https?:\/\//, "")}</p>
+					{durable && (
+						<div className="mt-3">
+							<button type="button" className="underline hover:text-uv" onClick={() => setOpen(!open)} aria-expanded={open}>
+								{getAccessToken() ? "Change access token" : "Add access token"}
+							</button>
+							{open && (
+								<form
+									className="mt-2 grid gap-2"
+									onSubmit={(event) => {
+										event.preventDefault();
+										setAccessToken(token.trim());
+										setToken("");
+										setOpen(false);
+										refresh();
+									}}
+								>
+									<label className="label" htmlFor="engine-token">Access token</label>
+									<input id="engine-token" type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} className="field" />
+									<button type="submit" className="btn-quiet !min-h-9 text-sm">Save for this tab</button>
+								</form>
+							)}
+						</div>
 					)}
 				</div>
 			)}
-			<p className="mt-2 break-all font-data text-xs text-graphite">{API_URL.replace(/^https?:\/\//, "")}</p>
 		</div>
 	);
 };

@@ -1,13 +1,8 @@
 import type { Metadata } from "next";
-import { Archivo, Atkinson_Hyperlegible, Sometype_Mono } from "next/font/google";
+import { Instrument_Sans, Sometype_Mono } from "next/font/google";
 import "@/styles/globals.css";
 
-const display = Archivo({ subsets: ["latin"], axes: ["wdth"], variable: "--font-display" });
-const body = Atkinson_Hyperlegible({
-	subsets: ["latin"],
-	weight: ["400", "700"],
-	variable: "--font-body",
-});
+const sans = Instrument_Sans({ subsets: ["latin"], axes: ["wdth"], variable: "--font-sans" });
 const data = Sometype_Mono({ subsets: ["latin"], variable: "--font-data" });
 
 export const metadata: Metadata = {
@@ -20,8 +15,8 @@ export const metadata: Metadata = {
 };
 
 const RootLayout = ({ children }: Readonly<{ children: React.ReactNode }>) => (
-	<html lang="en" className={`${display.variable} ${body.variable} ${data.variable}`}>
-		<body className="font-body antialiased">{children}</body>
+	<html lang="en" className={`${sans.variable} ${data.variable}`}>
+		<body className="font-sans antialiased">{children}</body>
 	</html>
 );
 

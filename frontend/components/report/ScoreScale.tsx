@@ -22,15 +22,15 @@ const ScoreScale = ({ score, tier }: { score: number; tier: string }) => {
 				className="relative mt-5"
 			>
 				<div
-					className="absolute -top-2 bottom-5 z-10 w-[3px] -translate-x-1/2 bg-carbon shadow-[0_0_0_2px_var(--paper)]"
+					className="absolute -top-2 bottom-5 z-10 w-[3px] -translate-x-1/2 bg-ink shadow-[0_0_0_2px_var(--surface)]"
 					style={{ left: `${Math.min(99.5, Math.max(0.5, value))}%` }}
 				/>
-				<div className="flex gap-0.5">
+				<div className="flex gap-0.5 overflow-hidden rounded-full">
 					{BANDS.map((band) => (
 						<div key={band.tier} className={`h-3 ${band.className}`} style={{ width: `${band.to - band.from}%` }} />
 					))}
 				</div>
-				<div className="relative mt-1 h-5 font-data text-xs text-graphite">
+				<div className="relative mt-1 h-5 font-data text-xs text-muted">
 					{[0, 35, 60, 80].map((tick) => (
 						<span key={tick} className="absolute" style={{ left: `${tick}%` }}>{tick}</span>
 					))}

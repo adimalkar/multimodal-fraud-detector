@@ -15,11 +15,11 @@ const TASK_NAMES: Record<string, string> = {
 };
 
 const STATUS: Record<string, { label: string; className: string }> = {
-	supported: { label: "Checked", className: "bg-uv text-paper" },
-	completed: { label: "Checked", className: "bg-uv text-paper" },
+	supported: { label: "Checked", className: "bg-uv text-canvas" },
+	completed: { label: "Checked", className: "bg-uv text-canvas" },
 	partial: { label: "Partly checked", className: "border border-uv text-uv" },
-	inconclusive: { label: "Inconclusive", className: "border border-graphite text-graphite" },
-	not_checked: { label: "Not checked", className: "border border-dashed border-graphite text-graphite" },
+	inconclusive: { label: "Inconclusive", className: "border border-muted text-muted" },
+	not_checked: { label: "Not checked", className: "border border-dashed border-muted text-muted" },
 };
 
 const display = (value: unknown): string => {
@@ -29,11 +29,11 @@ const display = (value: unknown): string => {
 };
 
 const TaskResults = ({ tasks }: { tasks: TaskResult[] }) => (
-	<ul className="divide-y divide-rule border-y border-rule">
+	<ul className="divide-y divide-line border-y border-line">
 		{tasks.map((task) => {
 			const status = STATUS[task.state === "not_checked" ? "not_checked" : task.status] ?? {
 				label: titleCase(task.status),
-				className: "border border-graphite text-graphite",
+				className: "border border-muted text-muted",
 			};
 			const limits = Array.isArray(task.limitations) ? task.limitations.join(" ") : task.limitations;
 			const coverage = Object.entries(task.coverage ?? {});
@@ -44,12 +44,12 @@ const TaskResults = ({ tasks }: { tasks: TaskResult[] }) => (
 						<h3 className="font-bold">{TASK_NAMES[task.task] ?? titleCase(task.task)}</h3>
 						<span className={`px-2 py-0.5 font-data text-xs ${status.className}`}>{status.label}</span>
 					</div>
-					{limits && <p className="mt-1 leading-snug text-graphite">{limits}</p>}
+					{limits && <p className="mt-1 leading-snug text-muted">{limits}</p>}
 					{coverage.length > 0 && (
 						<dl className="mt-2 grid gap-x-6 gap-y-0.5 font-data text-xs sm:grid-cols-2">
 							{coverage.map(([key, value]) => (
 								<div key={key} className="flex justify-between gap-3">
-									<dt className="text-graphite">{titleCase(key)}</dt>
+									<dt className="text-muted">{titleCase(key)}</dt>
 									<dd className="min-w-0 truncate text-right">{display(value)}</dd>
 								</div>
 							))}
@@ -58,7 +58,7 @@ const TaskResults = ({ tasks }: { tasks: TaskResult[] }) => (
 					{hasEvidence && (
 						<details className="mt-2">
 							<summary className="cursor-pointer text-sm underline hover:text-uv">Show raw evidence</summary>
-							<pre className="mt-2 max-h-64 overflow-auto bg-lightbox p-3 font-data text-xs">
+							<pre className="mt-2 max-h-64 overflow-auto bg-canvas p-3 font-data text-xs">
 								{JSON.stringify(task.evidence, null, 2)}
 							</pre>
 						</details>

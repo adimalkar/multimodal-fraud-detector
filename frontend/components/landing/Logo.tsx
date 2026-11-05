@@ -1,16 +1,15 @@
-/** An examiner's corner scale with a lens resting on it. */
-export const LogoMark = ({ className = "h-7 w-7" }: { className?: string }) => (
-	<svg viewBox="0 0 32 32" className={className} aria-hidden="true">
-		<path d="M3 3h5v21h21v5H3z" fill="currentColor" />
-		<path d="M3 8h2.5M3 13h2.5M3 18h2.5M13 29v-2.5M18 29v-2.5M23 29v-2.5" stroke="var(--paper)" strokeWidth="1.4" />
-		<circle cx="20" cy="12" r="7" fill="var(--uv)" />
-		<circle cx="20" cy="12" r="3" fill="var(--fluoro)" />
+/** Stacked sheets seen edge-on: the file coming apart into layers. */
+export const LogoMark = ({ className = "h-6 w-6" }: { className?: string }) => (
+	<svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+		<path d="M12 2.5 22 8l-10 5.5L2 8z" fill="currentColor" />
+		<path d="m4 12.2 8 4.4 8-4.4" stroke="var(--uv)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+		<path d="m4 16.2 8 4.4 8-4.4" stroke="var(--fluoro)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
 	</svg>
 );
 
 export const Wordmark = () => (
-	<span className="flex items-center gap-2.5 text-carbon">
+	<span className="flex items-center gap-2 text-ink">
 		<LogoMark />
-		<span className="display text-2xl leading-none">FraudSight</span>
+		<span className="text-[1.0625rem] font-semibold tracking-tight">FraudSight</span>
 	</span>
 );
