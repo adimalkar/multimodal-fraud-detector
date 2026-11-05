@@ -26,6 +26,7 @@ def test_risk_scorer_heuristics_and_synergy():
     assert crit["recommended_action"] == "BLOCK_TRANSACTION_AND_ALERT_SECURITY"
     assert crit["cross_modal_synergy_applied"] is True
     assert crit["risk_score"] > 0.80
+    assert len(crit["risk_factors"]) >= 3
 
 def test_metadata_extractor_image_flags():
     with tempfile.NamedTemporaryFile(suffix=".jpg") as f:

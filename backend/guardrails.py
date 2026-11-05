@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, List, Tuple, Optional
+
 from fastapi import HTTPException, Request, UploadFile
 
 # Environment configurations with sensible free-tier defaults
@@ -33,7 +33,7 @@ class InMemoryRateLimiter:
         self.default_limit = default_limit
         self.window_seconds = window_seconds
         # client_ip -> list of timestamps
-        self._requests: Dict[str, List[float]] = {}
+        self._requests: dict[str, list[float]] = {}
         self._last_cleanup = time.time()
 
     def _cleanup_old_records(self, now: float):
@@ -52,7 +52,7 @@ class InMemoryRateLimiter:
             self._requests.pop(ip, None)
         self._last_cleanup = now
 
-    def check(self, client_id: str, limit: Optional[int] = None) -> Tuple[bool, int, int]:
+    def check(self, client_id: str, limit: int | None = None) -> tuple[bool, int, int]:
         """
         Checks if the request is permitted.
         Returns: (is_allowed, remaining_requests, retry_after_seconds)
@@ -103,7 +103,7 @@ def get_client_ip(request: Request) -> str:
     return "127.0.0.1"
 
 
-def enforce_rate_limit(request: Request, limit: Optional[int] = None):
+def enforce_rate_limit(request: Request, limit: int | None = None):
     """
     Enforces in-memory rate limiting. Raises HTTP 429 if threshold is exceeded.
     """
@@ -157,7 +157,7 @@ def validate_file_size(file: UploadFile):
         pass
 
 
-def validate_batch_size(files: List[UploadFile]):
+def validate_batch_size(files: list[UploadFile]):
     """
     Validates that a batch upload doesn't exceed the safe sequential processing limit.
     """
@@ -168,3 +168,59 @@ def validate_batch_size(files: List[UploadFile]):
             status_code=400,
             detail=f"Batch size of {len(files)} exceeds maximum limit of {MAX_BATCH_SIZE} files per batch."
         )
+
+
+DANGEROUS_EXECUTABLE_SIGNATURES = [
+    (b"MZ", "Windows PE executable (EXE/DLL)"),
+    (b"\x7fELF", "Linux ELF binary executable"),
+    (b"\xca\xfe\xba\xbe", "Compiled binary bytecode"),
+]
+
+
+def validate_file_magic_bytes(header_bytes: bytes, declared_ext: str) -> tuple[bool, str]:
+    """
+    Validates file magic byte headers against the declared file extension.
+    Detects and rejects spoofed extensions and disguised binary executables.
+    Returns: (is_valid, reason_or_format)
+    """
+    if len(header_bytes) < 4:
+        return True, "Insufficient header bytes for magic validation"
+
+    # Reject dangerous executable formats disguised as documents/media
+    for sig, desc in DANGEROUS_EXECUTABLE_SIGNATURES:
+        if header_bytes.startswith(sig):
+            return False, f"Malicious or prohibited binary format detected: {desc}"
+
+    ext = declared_ext.lower().lstrip(".")
+
+    if ext == "pdf":
+        if header_bytes.startswith(b"%PDF-"):
+            return True, "application/pdf"
+        return False, "Header magic mismatch: Expected PDF (%PDF-) signature"
+
+    if ext == "png":
+        if header_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return True, "image/png"
+        return False, "Header magic mismatch: Expected PNG signature"
+
+    if ext in ("jpg", "jpeg"):
+        if header_bytes.startswith(b"\xff\xd8\xff"):
+            return True, "image/jpeg"
+        return False, "Header magic mismatch: Expected JPEG signature"
+
+    if ext == "webp":
+        if header_bytes.startswith(b"RIFF") and len(header_bytes) >= 12 and header_bytes[8:12] == b"WEBP":
+            return True, "image/webp"
+        return False, "Header magic mismatch: Expected RIFF/WEBP signature"
+
+    if ext in ("mkv", "webm"):
+        if header_bytes.startswith(b"\x1a\x45\xdf\xa3"):
+            return True, f"video/{ext}"
+        return False, "Header magic mismatch: Expected Matroska/WebM EBML signature"
+
+    if ext == "mp4":
+        if len(header_bytes) >= 8 and header_bytes[4:8] == b"ftyp":
+            return True, "video/mp4"
+        return False, "Header magic mismatch: Expected MP4 ftyp container box signature"
+
+    return True, "valid"

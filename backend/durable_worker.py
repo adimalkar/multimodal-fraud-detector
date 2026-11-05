@@ -16,6 +16,7 @@ from backend.pdf_evidence import (
     PDF_FIELD_PIPELINE_VERSION, PDF_OCR_PIPELINE_VERSION, PDF_PIPELINE_VERSION,
     PDF_SIGNATURE_PIPELINE_VERSION,
 )
+from backend.video_evidence import VIDEO_PIPELINE_VERSION, VIDEO_SAMPLING_PIPELINE_VERSION
 
 LOGGER = logging.getLogger(__name__)
 WORKER_ID = uuid.uuid4().hex
@@ -85,6 +86,18 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
             result = analyze_pdf_signature_evidence(
                 str(materialized), job["content_type"], job["artifact_sha256"]
             )
+        elif job["pipeline_version"] == VIDEO_PIPELINE_VERSION:
+            from backend.video_evidence import analyze_video_evidence
+
+            result = analyze_video_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
+        elif job["pipeline_version"] == VIDEO_SAMPLING_PIPELINE_VERSION:
+            from backend.video_evidence import analyze_video_sampling_evidence
+
+            result = analyze_video_sampling_evidence(
+                str(materialized), job["content_type"], job["artifact_sha256"]
+            )
         elif job["pipeline_version"] == PDF_OCR_PIPELINE_VERSION:
             from backend.pdf_evidence import analyze_pdf_ocr_evidence
 
@@ -141,6 +154,8 @@ def run_once(store: DurableJobStore, artifacts: EvidenceArtifactStore) -> bool:
                 job["id"], token, code, message, retry=retry,
                 retry_status=(
                     "queued_image" if job["pipeline_version"] == IMAGE_PIPELINE_VERSION
+                    else "queued_video_v2" if job["pipeline_version"] == VIDEO_SAMPLING_PIPELINE_VERSION
+                    else "queued_video_v1" if job["pipeline_version"] == VIDEO_PIPELINE_VERSION
                     else "queued_pdf_v4" if job["pipeline_version"] == PDF_FIELD_PIPELINE_VERSION
                     else "queued_pdf_v3" if job["pipeline_version"] == PDF_OCR_PIPELINE_VERSION
                     else "queued_pdf_v2" if job["pipeline_version"] == PDF_SIGNATURE_PIPELINE_VERSION
