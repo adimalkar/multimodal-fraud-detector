@@ -22,4 +22,4 @@ The `document_field_consistency` task remains inconclusive. No invoice totals, d
 
 `tests/test_pdf_ocr_evidence.py` uses real image-only PDFs to check recognized words and boxes, five-page budget coverage, text-layer skipping, malformed input, missing tools and credential isolation. `tests/test_durable_backend.py` checks v3 queue versioning, idempotency and zero billed model calls. These fixtures establish OCR plumbing, not extraction accuracy on representative documents.
 
-Next: declare an invoice or receipt schema, extract fields with page citations from bounded text/OCR, and test deterministic arithmetic and repeated-field rules against independently labeled controlled edits. Measure extraction error and false-positive rates before considering any document verdict.
+The [v4 invoice-field follow-up](PHASE3_PDF_INVOICE_FIELDS.md) adds one declared schema, cited amounts and conservative arithmetic. Extraction error and false-positive rates on independently labeled documents remain unmeasured; a document verdict remains outside this phase.
