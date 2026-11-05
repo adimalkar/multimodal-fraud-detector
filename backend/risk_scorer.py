@@ -496,3 +496,402 @@ class EntityCollusionDetector:
             "shared_attributes": shared_attrs,
             "syndicate_flagged": syndicate_flagged,
         }
+
+
+class DeviceGeoAnomalyDetector:
+    """
+    Detects impossible travel velocity, rapid geolocation shifts,
+    and device fingerprint churn across sequential user events.
+    """
+
+    EARTH_RADIUS_KM = 6371.0
+
+    def __init__(
+        self,
+        max_plausible_speed_kmh: float = 900.0,
+        device_churn_window_seconds: float = 86400.0,
+        max_allowed_devices_in_window: int = 3,
+    ):
+        self.max_plausible_speed_kmh = max_plausible_speed_kmh
+        self.device_churn_window_seconds = device_churn_window_seconds
+        self.max_allowed_devices_in_window = max_allowed_devices_in_window
+        # user_id -> list of recent location records: {"lat": float, "lon": float, "timestamp": float}
+        self.location_history: dict[str, list[dict[str, Any]]] = {}
+        # user_id -> list of (device_fp, timestamp)
+        self.device_history: dict[str, list[tuple[str, float]]] = {}
+
+    @staticmethod
+    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """
+        Calculates great-circle distance between two geographic coordinates in kilometers.
+        """
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_phi = math.radians(lat2 - lat1)
+        delta_lambda = math.radians(lon2 - lon1)
+
+        a = (
+            math.sin(delta_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+        )
+        c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+        return DeviceGeoAnomalyDetector.EARTH_RADIUS_KM * c
+
+    def record_and_evaluate(
+        self,
+        user_id: str,
+        lat: float,
+        lon: float,
+        timestamp: float | None = None,
+        device_fingerprint: str | None = None,
+        is_vpn_or_datacenter: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Evaluates geolocation velocity against historical baseline, tracks device churn,
+        and generates explainable anomaly signals and a composite geo-risk score.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        flags: list[str] = []
+        impossible_travel = False
+        calculated_speed_kmh = 0.0
+        distance_km = 0.0
+        time_delta_seconds = 0.0
+        risk_components: list[float] = [0.0]
+
+        # 1. Geolocation and Impossible Travel Check
+        if self.location_history.get(user_id):
+            last_record = self.location_history[user_id][-1]
+            time_delta_seconds = now - last_record["timestamp"]
+
+            if time_delta_seconds >= 0.0:
+                distance_km = self.haversine_distance(
+                    last_record["lat"], last_record["lon"], lat, lon
+                )
+
+                hours = time_delta_seconds / 3600.0
+                if hours < 0.001:  # Sub-3.6 seconds
+                    if distance_km > 5.0:
+                        calculated_speed_kmh = round(distance_km / 0.001, 1)
+                        impossible_travel = True
+                        flags.append(
+                            f"IMPOSSIBLE_CONCURRENT_TRAVEL ({round(distance_km, 1)}km in {round(time_delta_seconds, 1)}s)"
+                        )
+                        risk_components.append(0.95)
+                else:
+                    calculated_speed_kmh = round(distance_km / hours, 1)
+                    if calculated_speed_kmh > self.max_plausible_speed_kmh:
+                        impossible_travel = True
+                        flags.append(
+                            f"IMPOSSIBLE_TRAVEL_SPEED ({calculated_speed_kmh} km/h > {self.max_plausible_speed_kmh} km/h)"
+                        )
+                        excess_ratio = (
+                            calculated_speed_kmh / self.max_plausible_speed_kmh
+                        )
+                        risk_score_speed = min(0.90, 0.50 + (excess_ratio - 1.0) * 0.15)
+                        risk_components.append(round(risk_score_speed, 3))
+
+        # Store location update
+        if user_id not in self.location_history:
+            self.location_history[user_id] = []
+        self.location_history[user_id].append(
+            {
+                "lat": lat,
+                "lon": lon,
+                "timestamp": now,
+            }
+        )
+        if len(self.location_history[user_id]) > 20:
+            self.location_history[user_id] = self.location_history[user_id][-20:]
+
+        # 2. Device Fingerprint Churn Check
+        device_churn = False
+        distinct_devices = 0
+        if device_fingerprint:
+            if user_id not in self.device_history:
+                self.device_history[user_id] = []
+
+            cutoff = now - self.device_churn_window_seconds
+            self.device_history[user_id] = [
+                (dev, ts) for dev, ts in self.device_history[user_id] if ts >= cutoff
+            ]
+            self.device_history[user_id].append((device_fingerprint, now))
+
+            unique_devs = {dev for dev, _ in self.device_history[user_id]}
+            distinct_devices = len(unique_devs)
+            if distinct_devices > self.max_allowed_devices_in_window:
+                device_churn = True
+                flags.append(
+                    f"HIGH_DEVICE_CHURN ({distinct_devices} distinct devices in 24h)"
+                )
+                risk_components.append(0.65)
+
+        # 3. Datacenter / VPN Anonymizer Check
+        if is_vpn_or_datacenter:
+            flags.append("DATACENTER_OR_ANONYMOUS_PROXY_DETECTED")
+            risk_components.append(0.35)
+
+        geo_risk_score = min(1.0, max(risk_components))
+
+        # Determine Severity Tier
+        if geo_risk_score >= 0.80:
+            tier = "CRITICAL_FRAUD"
+        elif geo_risk_score >= 0.60:
+            tier = "HIGH_RISK"
+        elif geo_risk_score >= 0.30:
+            tier = "SUSPICIOUS"
+        else:
+            tier = "LOW_RISK"
+
+        return {
+            "user_id": user_id,
+            "geo_risk_score": round(geo_risk_score, 4),
+            "severity_tier": tier,
+            "impossible_travel_detected": impossible_travel,
+            "calculated_speed_kmh": calculated_speed_kmh,
+            "distance_km": round(distance_km, 2),
+            "time_delta_seconds": round(time_delta_seconds, 2),
+            "device_churn_detected": device_churn,
+            "distinct_devices_count": distinct_devices,
+            "anomaly_flags": flags,
+        }
+
+
+class BehavioralRiskDecayEngine:
+    """
+    Applies temporal exponential half-life decay to past risk scores and infractions.
+    Provides calibrated risk rehabilitation based on elapsed time and subsequent verified clean events.
+    """
+
+    def __init__(
+        self,
+        default_half_life_days: float = 14.0,
+        residual_risk_floor: float = 0.05,
+        clean_event_discount_factor: float = 0.90,
+    ):
+        self.default_half_life_days = default_half_life_days
+        self.residual_risk_floor = residual_risk_floor
+        self.clean_event_discount_factor = clean_event_discount_factor
+        # entity_id -> {"peak_risk": float, "last_infraction_ts": float, "clean_events_since": int}
+        self.profiles: dict[str, dict[str, Any]] = {}
+
+    def record_infraction(
+        self,
+        entity_id: str,
+        risk_score: float,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Records a new risk infraction for an entity, updating their peak risk profile.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        score = min(1.0, max(0.0, float(risk_score)))
+
+        if entity_id not in self.profiles:
+            self.profiles[entity_id] = {
+                "peak_risk": score,
+                "last_infraction_ts": now,
+                "clean_events_since": 0,
+            }
+        else:
+            current_decayed = self.calculate_decayed_risk(entity_id, now)[
+                "decayed_risk_score"
+            ]
+            self.profiles[entity_id] = {
+                "peak_risk": max(score, current_decayed),
+                "last_infraction_ts": now,
+                "clean_events_since": 0,
+            }
+
+        return {
+            "entity_id": entity_id,
+            "recorded_risk": score,
+            "timestamp": now,
+            "clean_events_since": 0,
+        }
+
+    def record_clean_event(
+        self,
+        entity_id: str,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Records a verified benign transaction, accelerating risk rehabilitation.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        if entity_id in self.profiles:
+            self.profiles[entity_id]["clean_events_since"] += 1
+            count = self.profiles[entity_id]["clean_events_since"]
+        else:
+            count = 1
+
+        decay_info = self.calculate_decayed_risk(entity_id, now)
+        return {
+            "entity_id": entity_id,
+            "clean_events_count": count,
+            "decayed_risk_score": decay_info["decayed_risk_score"],
+        }
+
+    def calculate_decayed_risk(
+        self,
+        entity_id: str,
+        current_timestamp: float | None = None,
+        half_life_days: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Calculates time-decayed risk score using exponential half-life formula:
+        R(t) = R_floor + (R_peak - R_floor) * (0.5 ** (delta_days / half_life)) * (discount ** clean_events)
+        """
+        now = current_timestamp if current_timestamp is not None else time.time()
+        if entity_id not in self.profiles:
+            return {
+                "entity_id": entity_id,
+                "original_peak_risk": 0.0,
+                "decayed_risk_score": 0.0,
+                "days_elapsed": 0.0,
+                "half_life_days": half_life_days or self.default_half_life_days,
+                "clean_events_discount_applied": False,
+                "clean_events_count": 0,
+                "rehabilitation_complete": True,
+            }
+
+        profile = self.profiles[entity_id]
+        peak = profile["peak_risk"]
+        infraction_ts = profile["last_infraction_ts"]
+        clean_count = profile["clean_events_since"]
+
+        hl_days = (
+            half_life_days
+            if half_life_days is not None
+            else self.default_half_life_days
+        )
+        elapsed_seconds = max(0.0, now - infraction_ts)
+        elapsed_days = elapsed_seconds / 86400.0
+
+        # Base exponential decay
+        decay_factor = 0.5 ** (elapsed_days / max(0.001, hl_days))
+
+        # Clean event bonus discount
+        behavior_discount = self.clean_event_discount_factor**clean_count
+
+        excess_risk = max(0.0, peak - self.residual_risk_floor)
+        decayed = self.residual_risk_floor + (
+            excess_risk * decay_factor * behavior_discount
+        )
+        floor_limit = (
+            self.residual_risk_floor if peak >= self.residual_risk_floor else 0.0
+        )
+        final_decayed = min(peak, max(floor_limit, decayed))
+
+        # Check if rehabilitation reached floor
+        rehab_complete = final_decayed <= (self.residual_risk_floor + 0.005)
+
+        return {
+            "entity_id": entity_id,
+            "original_peak_risk": round(peak, 4),
+            "decayed_risk_score": round(final_decayed, 4),
+            "days_elapsed": round(elapsed_days, 2),
+            "half_life_days": hl_days,
+            "clean_events_discount_applied": clean_count > 0,
+            "clean_events_count": clean_count,
+            "rehabilitation_complete": rehab_complete,
+        }
+
+
+class ModalConflictDetector:
+    """
+    Detects inter-modal divergence, discrepancy anomalies, and adversarial masking
+    where acute fraud signals in one modality are diluted by benign signals in others.
+    """
+
+    def __init__(
+        self,
+        conflict_divergence_threshold: float = 0.45,
+        masking_boost_factor: float = 0.25,
+    ):
+        self.conflict_divergence_threshold = conflict_divergence_threshold
+        self.masking_boost_factor = masking_boost_factor
+
+    def evaluate_modalities(
+        self,
+        modality_scores: dict[str, float],
+    ) -> dict[str, Any]:
+        """
+        Analyzes discrepancy across named modalities (e.g. {'text': 0.1, 'visual': 0.95, 'metadata': 0.2}).
+        Calculates pairwise divergence, max spread, conflict entropy, and anti-masking penalty.
+        """
+        clean_scores = {
+            k: min(1.0, max(0.0, float(v)))
+            for k, v in modality_scores.items()
+            if v is not None
+        }
+
+        if len(clean_scores) < 2:
+            single_score = next(iter(clean_scores.values())) if clean_scores else 0.0
+            return {
+                "max_divergence": 0.0,
+                "mean_divergence": 0.0,
+                "conflict_detected": False,
+                "conflict_tier": "CONGRUENT",
+                "divergence_pairs": [],
+                "conflict_penalty": 0.0,
+                "linear_fused_risk": round(single_score, 4),
+                "adjusted_fused_risk": round(single_score, 4),
+            }
+
+        pairs = []
+        keys = list(clean_scores.keys())
+        diffs = []
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                k1, k2 = keys[i], keys[j]
+                diff = abs(clean_scores[k1] - clean_scores[k2])
+                diffs.append(diff)
+                pairs.append(
+                    {
+                        "modality_a": k1,
+                        "modality_b": k2,
+                        "score_a": clean_scores[k1],
+                        "score_b": clean_scores[k2],
+                        "divergence": round(diff, 4),
+                    }
+                )
+
+        max_div = max(diffs) if diffs else 0.0
+        mean_div = sum(diffs) / len(diffs) if diffs else 0.0
+        peak_score = max(clean_scores.values())
+        linear_mean = sum(clean_scores.values()) / len(clean_scores)
+
+        # Detect conflict tier
+        conflict_detected = max_div >= self.conflict_divergence_threshold
+        if max_div >= 0.70 and peak_score >= 0.75:
+            tier = "CRITICAL_MODAL_MASKING"
+            penalty = round(self.masking_boost_factor * (max_div / 1.0), 3)
+        elif conflict_detected:
+            tier = "HIGH_CONFLICT"
+            penalty = round(self.masking_boost_factor * 0.6 * (max_div / 1.0), 3)
+        elif max_div >= 0.25:
+            tier = "MILD_DISCREPANCY"
+            penalty = 0.0
+        else:
+            tier = "CONGRUENT"
+            penalty = 0.0
+
+        # Anti-masking adjusted risk ensures peak fraud signal is preserved
+        adjusted_risk = min(
+            1.0,
+            max(
+                linear_mean + penalty,
+                peak_score * (1.0 - (1.0 - max_div) * 0.2),
+            ),
+        )
+
+        return {
+            "max_divergence": round(max_div, 4),
+            "mean_divergence": round(mean_div, 4),
+            "conflict_detected": conflict_detected,
+            "conflict_tier": tier,
+            "divergence_pairs": pairs,
+            "conflict_penalty": penalty,
+            "linear_fused_risk": round(linear_mean, 4),
+            "adjusted_fused_risk": round(adjusted_risk, 4),
+        }
