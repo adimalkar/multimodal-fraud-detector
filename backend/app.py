@@ -16,6 +16,7 @@ from backend.durable_jobs import SCHEMA_VERSION, IdempotencyConflict, JobBusy, Q
 from backend.durable_worker import build_components, delete_private_job, run_once
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
 from backend.pdf_evidence import PDF_PIPELINE_VERSION, PDF_SIGNATURE_PIPELINE_VERSION
+from backend.video_evidence import VIDEO_PIPELINE_VERSION
 
 try:
     from backend.guardrails import (
@@ -134,6 +135,13 @@ def pdf_evidence_mode(file: UploadFile) -> bool:
     return media_type == "Document"
 
 
+def video_evidence_mode(file: UploadFile) -> bool:
+    if os.getenv("VIDEO_EVIDENCE_PIPELINE_ENABLED", "0") != "1":
+        return False
+    media_type, _ = detect_media_type(file.filename, file.content_type or "")
+    return media_type == "Video"
+
+
 def evidence_pipeline_version(file: UploadFile) -> str:
     if image_evidence_mode(file):
         return IMAGE_PIPELINE_VERSION
@@ -143,11 +151,13 @@ def evidence_pipeline_version(file: UploadFile) -> str:
             if os.getenv("PDF_SIGNATURE_PIPELINE_ENABLED", "0") == "1"
             else PDF_PIPELINE_VERSION
         )
+    if video_evidence_mode(file):
+        return VIDEO_PIPELINE_VERSION
     return SCHEMA_VERSION
 
 
 def public_queue_status(status: str) -> str:
-    return "queued" if status in {"queued_image", "queued_pdf", "queued_pdf_v2"} else status
+    return "queued" if status in {"queued_image", "queued_pdf", "queued_pdf_v2", "queued_video_v1"} else status
 
 
 @lru_cache(maxsize=1)
