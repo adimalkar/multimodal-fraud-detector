@@ -4,12 +4,12 @@
 
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 5rem;
+  scroll-padding-top: 6rem;
 }
 
 body {
-  background: var(--lightbox);
-  color: var(--carbon);
+  background: var(--canvas);
+  color: var(--ink);
 }
 
 :focus-visible {
@@ -19,56 +19,91 @@ body {
 
 @layer components {
   .wrap {
-    @apply mx-auto w-full max-w-[1240px] px-4 md:px-8;
+    @apply mx-auto w-full max-w-[1200px] px-5 md:px-8;
   }
   .display {
-    font-family: var(--font-display);
-    font-stretch: 72%;
-    font-weight: 750;
-    letter-spacing: -0.012em;
-    line-height: 0.96;
+    font-weight: 500;
+    font-stretch: 94%;
+    letter-spacing: -0.035em;
+    line-height: 1;
   }
   .label {
     font-family: var(--font-data);
     font-size: 0.75rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--graphite);
+    letter-spacing: 0.02em;
+    color: var(--muted);
   }
   .tag {
-    @apply inline-flex h-6 min-w-6 items-center justify-center bg-marker px-1.5 text-carbon;
+    @apply inline-flex h-6 min-w-6 items-center justify-center rounded bg-marker px-1.5 text-[#14161b];
     font-family: var(--font-data);
     font-size: 0.8125rem;
     font-weight: 700;
-    clip-path: polygon(0 0, 100% 0, 100% 100%, 7px 100%, 0 calc(100% - 7px));
   }
   .btn {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 px-5 font-body text-base font-bold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-5 text-[0.9375rem] font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40;
   }
   .btn-primary {
-    @apply btn bg-carbon text-paper hover:bg-uv-field;
+    @apply btn bg-ink text-canvas hover:bg-white;
   }
   .btn-quiet {
-    @apply btn border border-carbon text-carbon hover:bg-carbon hover:text-paper;
+    @apply btn border border-line text-ink hover:border-muted;
   }
   .sheet {
-    @apply border border-rule bg-paper;
+    @apply rounded-2xl border border-line bg-surface;
   }
   .field {
-    @apply min-h-11 w-full border border-rule bg-paper px-3 font-data text-sm text-carbon placeholder:text-graphite/70 focus:border-uv focus:outline-none;
+    @apply min-h-11 w-full rounded-lg border border-line bg-canvas px-3 font-data text-sm text-ink placeholder:text-muted/70 focus:border-uv focus:outline-none;
   }
 }
 
-/* Ruler ticks along the top of the light table: an ABFO-style forensic scale. */
-.ruler {
-  height: 14px;
-  background-image:
-    repeating-linear-gradient(to right, var(--carbon) 0 1px, transparent 1px 100px),
-    repeating-linear-gradient(to right, var(--carbon) 0 1px, transparent 1px 50px),
-    repeating-linear-gradient(to right, var(--graphite) 0 1px, transparent 1px 10px);
-  background-size: 100% 14px, 100% 10px, 100% 5px;
-  background-repeat: repeat-x;
-  background-position: top left;
+/* Fine dot field behind quiet sections. */
+.dots {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Adapted from Magic UI's BorderBeam (MIT): a point of light travelling a rounded border. */
+.beam {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid transparent;
+  mask: linear-gradient(transparent, transparent) padding-box, linear-gradient(#000, #000) border-box;
+  mask-composite: intersect;
+}
+.beam::after {
+  content: "";
+  position: absolute;
+  width: 160px;
+  aspect-ratio: 1;
+  background: linear-gradient(to left, var(--fluoro), var(--uv), transparent);
+  offset-path: rect(0 auto auto 0 round 160px);
+  animation: beam 7s linear infinite;
+}
+@keyframes beam {
+  to {
+    offset-distance: 100%;
+  }
+}
+
+/* A band of light sweeping down a file while it's screened. */
+.scanline::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 28%;
+  background: linear-gradient(to bottom, transparent, rgba(125, 245, 216, 0.16) 88%, var(--fluoro));
+  animation: sweep 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+@keyframes sweep {
+  from {
+    transform: translateY(-20%);
+  }
+  to {
+    transform: translateY(290%);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

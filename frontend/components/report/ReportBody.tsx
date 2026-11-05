@@ -4,7 +4,7 @@ import ScoreScale from "./ScoreScale";
 import TaskResults from "./TaskResults";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-	<section className="border-t border-rule pt-4">
+	<section className="border-t border-line pt-4">
 		<h2 className="label mb-3">{title}</h2>
 		{children}
 	</section>
@@ -49,7 +49,7 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 				<p className="text-lg">This path reports evidence only, with no score. Review the checks below.</p>
 			)}
 
-			<p className="border-l-4 border-carbon pl-3 leading-snug">
+			<p className="border-l-4 border-ink pl-3 leading-snug">
 				<span className="font-bold">{actionLabel(result.decision === "manual_review" ? "MANUAL_REVIEW" : risk?.recommended_action)}.</span>{" "}
 				This score is an uncalibrated screening aid. Open the original before you decide.
 			</p>
@@ -93,7 +93,7 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 							return (
 								<div key={key} className="grid grid-cols-[8.5rem_1fr_2.5rem] items-center gap-3">
 									<dt>{label}</dt>
-									<dd className="h-2 bg-lightbox">
+									<dd className="h-2 bg-canvas">
 										<div className="h-2 rounded-r bg-uv" style={{ width: `${Math.min(100, share * 100)}%` }} />
 									</dd>
 									<dd className="text-right font-data text-sm">{(share * 100).toFixed(0)}</dd>
@@ -108,8 +108,8 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 				<Section title="File metadata">
 					<dl className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
 						{rows.map(([label, value]) => (
-							<div key={label} className="flex justify-between gap-4 border-b border-rule py-1">
-								<dt className="text-graphite">{label}</dt>
+							<div key={label} className="flex justify-between gap-4 border-b border-line py-1">
+								<dt className="text-muted">{label}</dt>
 								<dd className="min-w-0 truncate text-right font-data text-sm">{value}</dd>
 							</div>
 						))}
@@ -121,31 +121,31 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 				<dl className="grid gap-x-8 gap-y-1 font-data text-sm sm:grid-cols-2">
 					{result.classification && result.classification !== "Unknown" && (
 						<div className="flex justify-between gap-4">
-							<dt className="text-graphite">Model label</dt>
+							<dt className="text-muted">Model label</dt>
 							<dd>{titleCase(result.classification)} at {percent(result.confidence)}</dd>
 						</div>
 					)}
 					{result.votes?.map((vote) => (
 						<div key={vote.model} className="flex justify-between gap-4">
-							<dt className="min-w-0 truncate text-graphite">{vote.model}</dt>
+							<dt className="min-w-0 truncate text-muted">{vote.model}</dt>
 							<dd>{vote.vote}</dd>
 						</div>
 					))}
 					{typeof result.elapsed_seconds === "number" && (
 						<div className="flex justify-between gap-4">
-							<dt className="text-graphite">Time taken</dt>
+							<dt className="text-muted">Time taken</dt>
 							<dd>{result.elapsed_seconds}s</dd>
 						</div>
 					)}
 					{result.pipeline_version && (
 						<div className="flex justify-between gap-4">
-							<dt className="text-graphite">Pipeline</dt>
+							<dt className="text-muted">Pipeline</dt>
 							<dd>{result.pipeline_version}</dd>
 						</div>
 					)}
 					{result.model_usage?.calls !== undefined && (
 						<div className="flex justify-between gap-4">
-							<dt className="text-graphite">Model calls</dt>
+							<dt className="text-muted">Model calls</dt>
 							<dd>{result.model_usage.calls}</dd>
 						</div>
 					)}

@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { percent } from "@/lib/format";
 import Notice from "./Notice";
+import Page from "./Page";
 import PageTitle from "./PageTitle";
 import { useEngine } from "./useEngine";
 
@@ -116,8 +117,8 @@ const Rows = ({
 }) => (
 	<div>
 		<label htmlFor={id} className="font-bold">{title}</label>
-		<p className="text-graphite">{hint}</p>
-		<p className="mt-2 font-data text-xs text-graphite">{header}</p>
+		<p className="text-muted">{hint}</p>
+		<p className="mt-2 font-data text-xs text-muted">{header}</p>
 		<textarea
 			id={id}
 			rows={5}
@@ -155,12 +156,12 @@ const CONFLICT_LABELS: Record<string, string> = {
 const Result = ({ title, skipped, children }: { title: string; skipped: boolean; children?: React.ReactNode }) => (
 	<section className="sheet p-5">
 		<h3 className="text-lg font-bold">{title}</h3>
-		{skipped ? <p className="mt-1 text-graphite">Not checked. No input for this section.</p> : <div className="mt-3">{children}</div>}
+		{skipped ? <p className="mt-1 text-muted">Not checked. No input for this section.</p> : <div className="mt-3">{children}</div>}
 	</section>
 );
 
 const Flag = ({ on, yes, no }: { on: boolean; yes: string; no: string }) => (
-	<span className={`inline-block px-2 py-0.5 font-data text-xs ${on ? "bg-marker text-carbon" : "border border-rule text-graphite"}`}>
+	<span className={`inline-block px-2 py-0.5 font-data text-xs ${on ? "bg-marker text-[#14161b]" : "border border-line text-muted"}`}>
 		{on ? yes : no}
 	</span>
 );
@@ -169,11 +170,11 @@ const Table = ({ heads, children }: { heads: string[]; children: React.ReactNode
 	<div className="overflow-x-auto">
 		<table className="w-full min-w-[440px] border-collapse text-left text-sm">
 			<thead>
-				<tr className="border-b border-carbon">
+				<tr className="border-b border-ink">
 					{heads.map((head) => <th key={head} scope="col" className="label py-1.5 pr-3 font-normal">{head}</th>)}
 				</tr>
 			</thead>
-			<tbody className="[&_td]:py-2 [&_td]:pr-3 [&_tr]:border-b [&_tr]:border-rule">{children}</tbody>
+			<tbody className="[&_td]:py-2 [&_td]:pr-3 [&_tr]:border-b [&_tr]:border-line">{children}</tbody>
 		</table>
 	</div>
 );
@@ -220,7 +221,7 @@ const Results = ({ data }: { data: Signals }) => (
 						<li key={ring.ring_id} className="border-l-[3px] border-uv pl-3">
 							<p className="font-bold">{ring.size} linked parties <Flag on={ring.is_syndicate} yes="Review together" no="Weak link" /></p>
 							<p className="font-data text-sm">{ring.entities.join(", ")}</p>
-							<p className="text-sm text-graphite">Sharing {ring.shared_attributes.map((attribute) => attribute.replace(":", " ")).join("; ")}</p>
+							<p className="text-sm text-muted">Sharing {ring.shared_attributes.map((attribute) => attribute.replace(":", " ")).join("; ")}</p>
 						</li>
 					))}
 				</ul>
@@ -252,12 +253,12 @@ const Results = ({ data }: { data: Signals }) => (
 						/>
 					</p>
 					<dl className="mt-3 grid gap-1 font-data text-sm sm:grid-cols-3 sm:gap-6">
-						<div><dt className="text-graphite">Largest gap</dt><dd className="text-lg font-bold">{percent(data.conflict.max_divergence)}</dd></div>
-						<div><dt className="text-graphite">Simple average</dt><dd className="text-lg font-bold">{percent(data.conflict.linear_fused_risk)}</dd></div>
-						<div><dt className="text-graphite">Adjusted score</dt><dd className="text-lg font-bold">{percent(data.conflict.adjusted_fused_risk)}</dd></div>
+						<div><dt className="text-muted">Largest gap</dt><dd className="text-lg font-bold">{percent(data.conflict.max_divergence)}</dd></div>
+						<div><dt className="text-muted">Simple average</dt><dd className="text-lg font-bold">{percent(data.conflict.linear_fused_risk)}</dd></div>
+						<div><dt className="text-muted">Adjusted score</dt><dd className="text-lg font-bold">{percent(data.conflict.adjusted_fused_risk)}</dd></div>
 					</dl>
 					{data.conflict.conflict_detected && (
-						<p className="mt-2 text-graphite">One strong signal can be hidden by quiet ones in an average, so the adjusted score keeps it visible.</p>
+						<p className="mt-2 text-muted">One strong signal can be hidden by quiet ones in an average, so the adjusted score keeps it visible.</p>
 					)}
 				</>
 			)}
@@ -345,7 +346,7 @@ const ClaimSignals = () => {
 	};
 
 	return (
-		<div className="max-w-5xl">
+		<Page>
 			<PageTitle
 				title="Claim signals"
 				lede="Look across a claim’s activity for timing bursts, impossible travel, shared identifiers and signals that disagree. Fill in what you have. Empty sections are skipped."
@@ -386,7 +387,7 @@ const ClaimSignals = () => {
 				</div>
 			</form>
 			{result && <div className="mt-8"><Results data={result} /></div>}
-		</div>
+		</Page>
 	);
 };
 

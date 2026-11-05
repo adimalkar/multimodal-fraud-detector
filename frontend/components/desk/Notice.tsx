@@ -1,7 +1,7 @@
 const TONE = {
 	error: "border-status-bad",
 	warn: "border-status-warn",
-	info: "border-rule",
+	info: "border-line",
 };
 
 const Notice = ({
@@ -13,9 +13,9 @@ const Notice = ({
 	title: string;
 	children?: React.ReactNode;
 }) => (
-	<div role={tone === "error" ? "alert" : "status"} className={`border border-l-4 border-rule bg-paper p-4 ${TONE[tone]}`}>
+	<div role={tone === "error" ? "alert" : "status"} className={`border border-l-4 border-line bg-surface p-4 ${TONE[tone]}`}>
 		<p className="font-bold">{title}</p>
-		{children && <div className="mt-1 leading-snug text-carbon">{children}</div>}
+		{children && <div className="mt-1 leading-snug text-ink">{children}</div>}
 	</div>
 );
 
