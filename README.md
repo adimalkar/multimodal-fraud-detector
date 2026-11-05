@@ -31,7 +31,7 @@ flowchart LR
     Durable --> Queue[(PostgreSQL queue)]
     Queue --> Worker[Separate bounded worker]
     Worker --> Image[Image provenance evidence]
-    Worker --> PDF[PDF structure and signatures]
+    Worker --> PDF[PDF structure, signatures and OCR]
     Worker --> Video[Video structure and scene samples]
     VLM --> Review[Manual review]
     Image --> Review
@@ -46,7 +46,7 @@ The durable path stores a versioned job and original hash, then routes each form
 | Modality | Opt-in evidence available in this branch | What it establishes | Still needed for detection |
 | --- | --- | --- | --- |
 | Image | Original-byte provenance observations | Whether supported C2PA credentials can be checked | Rights-cleared pixel and local-edit detectors, held-out evaluation |
-| PDF | Bounded structure, page coverage, and offline signature/revision checks | Document structure and cryptographic integrity under configured trust roots | OCR, cited fields, document-specific rules, and measured error rates; follow-on work is in separate draft PRs |
+| PDF | Bounded structure, page coverage, offline signature/revision checks, and bounded page OCR with word boxes | Document structure and cryptographic integrity under configured trust roots | Cited fields, document-specific rules, and measured error rates |
 | Video | Container/stream metadata plus bounded scene scan and timestamped frame hashes | What the worker sampled and where decoding failed | Tested generated-video and face-manipulation detectors with segment-level evaluation |
 
 An absent C2PA manifest, unsigned PDF, editor tag, low frame rate, or missing EXIF is **not** evidence of fraud. A valid signature establishes integrity under its trust configuration, not the truth of a document's contents. The video path does not inspect audio or classify frame content. Evidence paths return `Unknown`, `manual_review`, and zero paid model calls. See [image](docs/PHASE2_IMAGE_EVIDENCE.md), [PDF structure](docs/PHASE3_PDF_EVIDENCE.md), [PDF signatures](docs/PHASE3_PDF_SIGNATURE_EVIDENCE.md), [video structure](docs/PHASE4_VIDEO_STRUCTURE_EVIDENCE.md), and [video sampling](docs/PHASE4_VIDEO_SAMPLING.md) for exact limits and result contracts.
