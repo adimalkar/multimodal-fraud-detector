@@ -60,6 +60,19 @@ An absent C2PA manifest, unsigned PDF, editor tag, low frame rate, or missing EX
 
 The [implementation plan](docs/MULTIMODAL_DETECTION_IMPLEMENTATION_PLAN.md) contains phase gates. The [architecture review](docs/DETECTOR_ARCHITECTURE_REVIEW.md) explains the research and why a model jury is not the product decision layer. [technical_report.md](technical_report.md) describes the original hackathon system, not the current rollout.
 
+## Provenance checks
+
+Every file is checked for what it says about its own origin before any model call (`backend/provenance.py`):
+
+- **Content Credentials (C2PA):** a signed manifest that declares AI generation, as Google, OpenAI and Adobe add.
+- **Embedded source tags:** IPTC `DigitalSourceType` values in XMP, such as `trainedAlgorithmicMedia`. These are unsigned.
+- **Generator metadata:** Stable Diffusion, ComfyUI and InvokeAI settings in PNG text, and generator names in EXIF tool fields.
+- **Visible generator marks:** OCR along the frame edges for marks such as Veo, Sora and Kling. This needs `tesseract`, which the Docker image includes but Render's Python runtime doesn't, so Render reports this check as not run and relies on the vision model reporting a visible mark instead.
+
+A signed or tagged AI declaration scores 95 and skips the model call. A visible mark, or credentials whose signature no longer verifies, sets a floor of 70. These checks only raise files for review: a missing declaration proves nothing, because metadata is easy to strip.
+
+An unreadable vision-model answer is retried once, then completes as unscored rather than failing the job.
+
 ## Cost and safety controls
 
 - Deterministic evidence tasks make no model call. The legacy screening path uses at most one approved, capped vision request per item; an OpenRouter account hard spending limit is still needed before public use.

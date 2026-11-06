@@ -49,9 +49,9 @@ except ImportError:
     )
 
 try:
-    from backend.qwen_agent import analyze_media, analyze_video, missing_model_credentials
+    from backend.qwen_agent import ModelOutputUnusable, analyze_media, analyze_video, missing_model_credentials
 except ImportError:
-    from qwen_agent import analyze_media, analyze_video, missing_model_credentials
+    from qwen_agent import ModelOutputUnusable, analyze_media, analyze_video, missing_model_credentials
 
 try:
     from backend.provider_readiness import verify_provider_authentication
@@ -92,10 +92,12 @@ try:
     from backend.risk_scorer import MultimodalRiskScorer
     from backend.metadata_extractor import extract_metadata
     from backend.claim_signals import ClaimSignalsRequest, evaluate_claim_signals
+    from backend.provenance import inspect_provenance, model_reported_watermark
 except ImportError:
     from risk_scorer import MultimodalRiskScorer
     from metadata_extractor import extract_metadata
     from claim_signals import ClaimSignalsRequest, evaluate_claim_signals
+    from provenance import inspect_provenance, model_reported_watermark
 
 risk_scorer_engine = MultimodalRiskScorer()
 single_model_risk_scorer = MultimodalRiskScorer(
@@ -381,8 +383,64 @@ def detect_media_type(filename: str, content_type: str) -> tuple[str, str]:
         return "Image", "image/webp"
     return "Image", "image/jpeg"
 
+# Provenance findings set a floor on the screening score. A file that declares
+# itself AI-generated is self-incriminating, so a strong declaration needs no
+# model call. Provenance never lowers a score or clears a file.
+PROVENANCE_SCORE_FLOOR = {"strong": 0.95, "moderate": 0.70}
+
+
+def run_provenance(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
+    try:
+        return inspect_provenance(file_path, media_type, content_type)
+    except Exception as error:  # A provenance failure must not hide the visual screening.
+        print(f"Provenance checks failed: {type(error).__name__}")
+        return {"version": None, "checks": [], "findings": [], "decisive": False,
+                "error": "Provenance checks could not run on this file."}
+
+
+def provenance_floor(provenance: Dict[str, Any]) -> Optional[float]:
+    floors = [PROVENANCE_SCORE_FLOOR[finding["strength"]] for finding in provenance["findings"]
+              if finding["strength"] in PROVENANCE_SCORE_FLOOR]
+    return max(floors) if floors else None
+
+
+def screening_without_model(
+    provenance: Dict[str, Any], metadata: Dict[str, Any], metadata_flags: List[str], flags_count: int,
+    media_type: str, started: float, reason: str, classification: str, model_usage: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """A result built from checks alone: either decisive provenance, or a model answer that couldn't be read."""
+    floor = provenance_floor(provenance)
+    return {
+        "classification": classification,
+        "confidence": floor or 0.0,
+        "confidence_score": floor or 0.0,
+        "reason": reason,
+        "vision_findings": "",
+        "votes": [],
+        "vote_breakdown": {},
+        "consensus": "provenance" if classification == "Fake" else "inconclusive",
+        "calibration": "Built from file checks, not a calibrated probability. A person must review the original.",
+        "risk_calibration": "Provenance sets a minimum score. It is not a calibrated fraud probability.",
+        "model_usage": model_usage or {"calls": 0, "cost": 0.0},
+        "needs_review": True,
+        "elapsed_seconds": round(time.time() - started, 2),
+        "media_type": media_type,
+        "provenance": provenance,
+        "multimodal_risk": {
+            "risk_score": floor,
+            "severity_tier": single_model_risk_scorer._determine_tier(floor) if floor is not None else None,
+            "recommended_action": "MANUAL_REVIEW",
+            "cross_modal_synergy_applied": False,
+            "breakdown": None,
+            "metadata": metadata,
+            "metadata_flags": [finding["summary"] for finding in provenance["findings"]] + metadata_flags,
+            "metadata_flags_count": flags_count,
+        },
+    }
+
+
 def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -> Dict[str, Any]:
-    """Run visual screening and format its provisional result with metadata signals."""
+    """Check provenance first, then run visual screening only when it can add something."""
     start_time = time.time()
 
     # 1. Forensic metadata extraction
@@ -391,11 +449,29 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     metadata_flags = meta_info.get("flags", [])
     flags_count = meta_info.get("flags_count", 0)
 
-    # 2. One bounded vision request
-    if media_type == "Video":
-        raw_result = analyze_video(file_path)
-    else:
-        raw_result = analyze_media(file_path, content_type, media_type=media_type)
+    # 2. What the file says about its own origin. A strong declaration ends here.
+    provenance = run_provenance(file_path, media_type, content_type)
+    if provenance["decisive"]:
+        strong = next(finding for finding in provenance["findings"] if finding["strength"] == "strong")
+        return screening_without_model(
+            provenance, metadata_dict, metadata_flags, flags_count, media_type, start_time,
+            f"{strong['summary']} No model call was needed. Confirm against the original before acting.",
+            "Fake",
+        )
+
+    # 3. One bounded vision request
+    try:
+        if media_type == "Video":
+            raw_result = analyze_video(file_path)
+        else:
+            raw_result = analyze_media(file_path, content_type, media_type=media_type)
+    except ModelOutputUnusable:
+        return screening_without_model(
+            provenance, metadata_dict, metadata_flags, flags_count, media_type, start_time,
+            "The vision model didn't return a usable answer, so visual screening couldn't score this file. "
+            "Review the checks below and the original.",
+            "Unknown",
+        )
 
     elapsed = round(time.time() - start_time, 2)
 
@@ -454,6 +530,20 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
     if single_visual_model:
         risk_assessment["recommended_action"] = "MANUAL_REVIEW"
 
+    # 5. A watermark the model saw, when OCR isn't available or missed it.
+    reported = model_reported_watermark(raw_result.get("visible_watermark"))
+    if reported and not any(finding["kind"] == "visible_watermark" for finding in provenance["findings"]):
+        provenance["findings"].append({
+            "kind": "visible_watermark", "strength": "moderate", "source": "vision_model",
+            "summary": f"The vision model reports a visible AI-generator mark reading \"{reported}\".",
+        })
+    floor = provenance_floor(provenance)
+    if floor is not None and floor > risk_assessment["risk_score"]:
+        risk_assessment["risk_score"] = floor
+        risk_assessment["severity_tier"] = single_model_risk_scorer._determine_tier(floor)
+        risk_assessment["recommended_action"] = "MANUAL_REVIEW"
+    metadata_flags = [finding["summary"] for finding in provenance["findings"]] + metadata_flags
+
     return {
         "classification": classification,
         "confidence": confidence_score,
@@ -469,6 +559,7 @@ def execute_agent_analysis(file_path: str, media_type: str, content_type: str) -
         "needs_review": raw_result.get("needs_review", single_visual_model),
         "elapsed_seconds": elapsed,
         "media_type": media_type,
+        "provenance": provenance,
         "multimodal_risk": {
             "risk_score": risk_assessment["risk_score"],
             "severity_tier": risk_assessment["severity_tier"],
@@ -508,7 +599,7 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
         # Automatically persist to database for analytics dashboard
         try:
             filename = jobs[job_id].get("filename", "evidence_file")
-            risk_data = formatted_result.get("multimodal_risk", {})
+            risk_data = formatted_result.get("multimodal_risk") or {}
             save_evaluation(
                 filename=filename,
                 media_type=media_type,
@@ -581,7 +672,7 @@ def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
             processed_count += 1
 
             try:
-                risk_data = formatted_result.get("multimodal_risk", {})
+                risk_data = formatted_result.get("multimodal_risk") or {}
                 save_evaluation(
                     filename=filename,
                     media_type=media_type,
