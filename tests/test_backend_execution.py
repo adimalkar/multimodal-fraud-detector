@@ -262,7 +262,7 @@ def test_video_uses_one_bounded_vision_request(monkeypatch):
     assert url == "https://openrouter.ai/api/v1/chat/completions"
     assert headers["Authorization"] == "Bearer test-key"
     assert payload["model"] == "google/gemma-4-26b-a4b-it"
-    assert payload["max_tokens"] == 350
+    assert payload["max_tokens"] == 700  # room for a full answer; truncated JSON was a crash cause
     assert len(payload["messages"][1]["content"]) == 4
     assert timeout == (10, 90)
     assert result["model_usage"]["cost"] == 0.0001

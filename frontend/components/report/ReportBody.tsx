@@ -1,4 +1,4 @@
-import type { ScreeningResult } from "@/lib/api";
+import type { ProvenanceCheck, ScreeningResult } from "@/lib/api";
 import { actionLabel, percent, titleCase } from "@/lib/format";
 import ScoreScale from "./ScoreScale";
 import TaskResults from "./TaskResults";
@@ -35,6 +35,35 @@ const CONTRIBUTIONS = [
 	["Metadata", "metadata_contribution"],
 ] as const;
 
+const CHECK_NAMES: Record<string, string> = {
+	content_credentials: "Content Credentials (C2PA)",
+	embedded_tags: "Embedded source tags",
+	generator_metadata: "Generator metadata",
+	visible_watermark: "Visible generator mark",
+};
+
+/** Plain words for each check's state. A check that didn't run says so; it never reads as clean. */
+const checkState = (check: ProvenanceCheck): string => {
+	switch (check.state) {
+		case "valid_trusted":
+			return check.ai_declared ? `Declares AI generation · trusted signer ${check.signer ?? ""}` : `No AI declaration · trusted signer ${check.signer ?? ""}`;
+		case "valid_untrusted":
+			return check.ai_declared ? `Declares AI generation · signed by ${check.signer ?? "an unnamed signer"}` : `No AI declaration · signed by ${check.signer ?? "an unnamed signer"}`;
+		case "invalid":
+			return check.ai_declared ? "Declares AI generation · signature broken by later changes" : "Signature broken by later changes";
+		case "found":
+			return check.check === "embedded_tags" && !check.ai_declared ? "Tags found, none declare AI generation" : "Found";
+		case "absent":
+			return "None found";
+		case "unsupported":
+			return "Not applicable to this file type";
+		case "not_run":
+			return check.reason ? `Not checked: ${check.reason}` : "Not checked";
+		default:
+			return "Couldn’t be checked";
+	}
+};
+
 /** Findings for one file. Used by the single report and by each batch row. */
 const ReportBody = ({ result }: { result: ScreeningResult }) => {
 	const risk = result.multimodal_risk;
@@ -43,15 +72,17 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 
 	return (
 		<div className="grid gap-6">
-			{risk ? (
-				<ScoreScale score={risk.risk_score} tier={risk.severity_tier} />
+			{risk && typeof risk.risk_score === "number" ? (
+				<ScoreScale score={risk.risk_score} tier={risk.severity_tier ?? ""} />
 			) : (
-				<p className="text-lg">This path reports evidence only, with no score. Review the checks below.</p>
+				<p className="text-lg">This file has no score. Review the checks below and the original.</p>
 			)}
 
 			<p className="border-l-4 border-ink pl-3 leading-snug">
 				<span className="font-bold">{actionLabel(result.decision === "manual_review" ? "MANUAL_REVIEW" : risk?.recommended_action)}.</span>{" "}
-				This score is an uncalibrated screening aid. Open the original before you decide.
+				{risk && typeof risk.risk_score === "number"
+					? "This score is an uncalibrated screening aid. Open the original before you decide."
+					: "Open the original before you decide."}
 			</p>
 
 			{result.reason && (
@@ -82,6 +113,22 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 			{result.task_results && result.task_results.length > 0 && (
 				<Section title="Checks run on this file">
 					<TaskResults tasks={result.task_results} />
+				</Section>
+			)}
+
+			{result.provenance && result.provenance.checks.length > 0 && (
+				<Section title="What the file says about its origin">
+					<dl className="grid gap-1.5">
+						{result.provenance.checks.map((check) => (
+							<div key={check.check} className="grid gap-x-6 sm:grid-cols-[14rem_1fr]">
+								<dt className="text-muted">{CHECK_NAMES[check.check] ?? titleCase(check.check)}</dt>
+								<dd className={check.ai_declared || (check.check === "visible_watermark" && check.state === "found") ? "font-bold" : ""}>
+									{checkState(check)}
+								</dd>
+							</div>
+						))}
+					</dl>
+					<p className="mt-2 text-sm text-muted">These checks can raise a file for review. A file with no declaration isn’t cleared by them.</p>
 				</Section>
 			)}
 
@@ -119,7 +166,7 @@ const ReportBody = ({ result }: { result: ScreeningResult }) => {
 
 			<Section title="Run details">
 				<dl className="grid gap-x-8 gap-y-1 font-data text-sm sm:grid-cols-2">
-					{result.classification && result.classification !== "Unknown" && (
+					{result.classification && result.classification !== "Unknown" && result.consensus !== "provenance" && (
 						<div className="flex justify-between gap-4">
 							<dt className="text-muted">Model label</dt>
 							<dd>{titleCase(result.classification)} at {percent(result.confidence)}</dd>

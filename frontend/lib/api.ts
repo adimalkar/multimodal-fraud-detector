@@ -106,8 +106,9 @@ export interface RiskBreakdown {
 }
 
 export interface MultimodalRisk {
-	risk_score: number;
-	severity_tier: string;
+	/** null when nothing could score the file, for example an unreadable model answer. */
+	risk_score: number | null;
+	severity_tier: string | null;
 	recommended_action: string;
 	cross_modal_synergy_applied?: boolean;
 	breakdown?: RiskBreakdown;
@@ -127,8 +128,27 @@ export interface TaskResult {
 	calibrated_score?: number | null;
 }
 
+export interface ProvenanceCheck {
+	check: "content_credentials" | "embedded_tags" | "generator_metadata" | "visible_watermark" | string;
+	state: string;
+	signer?: string | null;
+	ai_declared?: boolean;
+	trust_list_configured?: boolean;
+	reason?: string;
+}
+
+export interface Provenance {
+	checks: ProvenanceCheck[];
+	findings: Array<{ kind: string; strength: "strong" | "moderate"; summary: string; source: string }>;
+	decisive: boolean;
+	error?: string;
+}
+
 export interface ScreeningResult {
 	classification: string;
+	consensus?: string;
+	visible_watermark?: string;
+	provenance?: Provenance;
 	confidence: number;
 	reason?: string;
 	vision_findings?: string;
