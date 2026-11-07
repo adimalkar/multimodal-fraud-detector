@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Dict, Any, Optional, List
 
 from backend.durable_auth import configured_tokens, require_tenant
+from backend.web_auth import daily_file_limit, require_user, web_auth_state
 from backend.durable_jobs import SCHEMA_VERSION, IdempotencyConflict, JobBusy, QuotaExceeded
 from backend.durable_worker import build_components, delete_private_job, run_once
 from backend.image_evidence import IMAGE_PIPELINE_VERSION
@@ -75,6 +76,7 @@ except ImportError:
 
 try:
     from backend.db_service import (
+        consume_daily_files,
         save_evaluation,
         get_analytics_summary,
         get_evaluations_list,
@@ -82,6 +84,7 @@ try:
     )
 except ImportError:
     from db_service import (
+        consume_daily_files,
         save_evaluation,
         get_analytics_summary,
         get_evaluations_list,
@@ -519,7 +522,8 @@ def run_analysis_pipeline(job_id: str, file_path: str, media_type: str, content_
                 processing_time=elapsed,
                 risk_score=risk_data.get("risk_score"),
                 severity_tier=risk_data.get("severity_tier"),
-                recommended_action=risk_data.get("recommended_action")
+                recommended_action=risk_data.get("recommended_action"),
+                owner_id=jobs[job_id].get("owner_id"),
             )
         except Exception as db_err:
             print(f"Database save notice: {db_err}")
@@ -592,7 +596,8 @@ def run_batch_pipeline(batch_id: str, file_specs: List[Dict[str, str]]):
                     processing_time=formatted_result.get("elapsed_seconds", 0.0),
                     risk_score=risk_data.get("risk_score"),
                     severity_tier=risk_data.get("severity_tier"),
-                    recommended_action=risk_data.get("recommended_action")
+                    recommended_action=risk_data.get("recommended_action"),
+                    owner_id=batch.get("owner_id"),
                 )
             except Exception as dbe:
                 print(f"Batch db save notice: {dbe}")
@@ -693,6 +698,26 @@ def root():
         }
     }
 
+def claim_daily_files(owner_id: Optional[str], files: int) -> None:
+    """Count accepted files against a signed-in visitor's daily allowance."""
+    if owner_id is None:
+        return
+    limit = daily_file_limit()
+    try:
+        allowed = consume_daily_files(owner_id, files, limit)
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="Daily usage could not be checked; try again shortly") from error
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"This would go past today's limit of {limit} files per account. The limit resets at 00:00 UTC.",
+        )
+
+
+def owned(record: Dict[str, Any], owner_id: Optional[str]) -> bool:
+    return record.get("owner_id") == owner_id
+
+
 @app.get("/health")
 @app.get("/api/health")
 def health_check():
@@ -719,7 +744,8 @@ def health_check():
         "providers_configured": not missing_model_credentials(),
         "storage_configured": is_storage_configured(),
         "active_jobs": len([j for j in jobs.values() if j.get("status") in ["queued", "processing"]]),
-        "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]])
+        "active_batches": len([b for b in batches.values() if b.get("status") in ["queued", "processing"]]),
+        "web_auth": web_auth_state(),
     }
 
 
@@ -749,6 +775,7 @@ def request_presigned_url(req: PresignedUrlRequest, request: Request):
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=410, detail="Use authenticated direct upload")
+    require_user(request)
     enforce_rate_limit(request)
     validate_file_extension(req.filename)
     return generate_presigned_upload_url(req.filename, req.content_type)
@@ -781,6 +808,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
             "media_type": job["media_type"], "filename": job["filename"],
             "message": "Analysis queued. Poll /api/jobs/{job_id} for progress.",
         }
+    owner_id = require_user(request)
     enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -789,6 +817,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
     validate_file_size(file)
     validate_file_content(file)
     ensure_analysis_available()
+    claim_daily_files(owner_id, 1)
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -808,6 +837,7 @@ async def create_analysis_job(background_tasks: BackgroundTasks, request: Reques
         "filename": file.filename,
         "media_type": media_type,
         "content_type": content_type,
+        "owner_id": owner_id,
         "status": "queued",
         "progress": 10,
         "stage": f"Queued for {media_type.lower()} forensics...",
@@ -836,6 +866,7 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=410, detail="Arbitrary URL ingestion is disabled; use direct upload")
+    owner_id = require_user(request)
     enforce_rate_limit(request)
     if not req.media_url:
         raise HTTPException(status_code=400, detail="media_url is required")
@@ -845,6 +876,7 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
 
     validate_file_extension(req.filename or "evidence.jpg")
     ensure_analysis_available()
+    claim_daily_files(owner_id, 1)
 
     cleanup_old_jobs()
     job_id = str(uuid.uuid4())
@@ -856,6 +888,7 @@ async def create_analysis_job_from_url_endpoint(background_tasks: BackgroundTask
         "media_url": req.media_url,
         "media_type": media_type,
         "content_type": content_type,
+        "owner_id": owner_id,
         "status": "queued",
         "progress": 10,
         "stage": f"Queued for {media_type.lower()} forensics from cloud storage...",
@@ -884,9 +917,10 @@ def get_job_status(job_id: str, request: Request):
         if not job or job["kind"] != "item":
             raise HTTPException(status_code=404, detail="Job not found")
         return durable_item_response(job)
+    owner_id = require_user(request)
     cleanup_old_jobs()
     job = jobs.get(job_id)
-    if not job:
+    if not job or not owned(job, owner_id):
         raise HTTPException(status_code=404, detail="Job not found or expired")
 
     now = time.time()
@@ -942,6 +976,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
             "total_files": len(files),
             "message": "Batch submission accepted. Poll /api/batch/{batch_id} for progress.",
         }
+    owner_id = require_user(request)
     enforce_rate_limit(request)
     validate_batch_size(files)
 
@@ -954,6 +989,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
         validate_file_size(f)
         validate_file_content(f)
     ensure_analysis_available()
+    claim_daily_files(owner_id, len(valid_files))
 
     cleanup_old_jobs()
     batch_id = str(uuid.uuid4())
@@ -990,6 +1026,7 @@ async def create_batch_job(background_tasks: BackgroundTasks, request: Request, 
 
     batches[batch_id] = {
         "batch_id": batch_id,
+        "owner_id": owner_id,
         "status": "queued",
         "stage": f"Queued {len(valid_files)} evidence files for batch evaluation...",
         "total_items": len(valid_files),
@@ -1027,9 +1064,10 @@ def get_batch_status(batch_id: str, request: Request):
         if not parent or parent["kind"] != "batch":
             raise HTTPException(status_code=404, detail="Batch not found")
         return durable_batch_response(parent, store.children(batch_id, owner_id))
+    owner_id = require_user(request)
     cleanup_old_jobs()
     batch = batches.get(batch_id)
-    if not batch:
+    if not batch or not owned(batch, owner_id):
         raise HTTPException(status_code=404, detail="Batch not found or expired")
 
     now = time.time()
@@ -1071,6 +1109,7 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=410, detail="Use the asynchronous analysis API")
+    owner_id = require_user(request)
     enforce_rate_limit(request)
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
@@ -1079,6 +1118,7 @@ async def analyze_media_sync(request: Request, file: UploadFile = File(...)):
     validate_file_size(file)
     validate_file_content(file)
     ensure_analysis_available()
+    claim_daily_files(owner_id, 1)
 
     file_id = str(uuid.uuid4())
     file_path = os.path.join(TEMP_DIR, f"sync_{file_id}_{file.filename}")
@@ -1105,6 +1145,8 @@ def claim_signals(req: ClaimSignalsRequest, request: Request):
     """Run the claim-level scoring engines on caller-supplied rows. Nothing is stored."""
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
+    else:
+        require_user(request)
     enforce_rate_limit(request)
     if req.is_empty():
         raise HTTPException(status_code=400, detail="Add at least one event, entity, finding or score")
@@ -1116,17 +1158,19 @@ def get_analytics_stats(request: Request):
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
+    owner_id = require_user(request)
     cleanup_old_jobs()
-    return get_analytics_summary()
+    return get_analytics_summary(owner_id=owner_id)
 
 @app.get("/api/analytics/evaluations")
 def get_evaluations(request: Request, limit: int = 50, offset: int = 0):
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
+    owner_id = require_user(request)
     cleanup_old_jobs()
     return {
-        "evaluations": get_evaluations_list(limit=limit, offset=offset),
+        "evaluations": get_evaluations_list(limit=limit, offset=offset, owner_id=owner_id),
         "limit": limit,
         "offset": offset
     }
@@ -1136,7 +1180,8 @@ def download_evaluations_csv(request: Request):
     if DURABLE_JOBS_ENABLED:
         require_tenant(request)
         raise HTTPException(status_code=503, detail="Tenant-scoped analytics are not available yet")
-    csv_data = export_evaluations_csv()
+    owner_id = require_user(request)
+    csv_data = export_evaluations_csv(owner_id=owner_id)
     return Response(
         content=csv_data,
         media_type="text/csv",
