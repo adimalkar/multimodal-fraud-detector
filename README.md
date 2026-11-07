@@ -103,6 +103,16 @@ python -m ruff check . --select=E9,F63,F7,F82
 
 `python scripts/check_media_pipeline.py http://localhost:8000` exercises provider-backed jobs and can spend credits. It checks response shape, not detector accuracy. Frontend checks are `npm run type-check`, `npm run lint`, and `npm run build` from `frontend/`.
 
+## Sign-in
+
+The landing page is public. The workspace (`/analyze`, `/analytics`, `/signals`) needs a Google or GitHub sign-in through Auth.js. After sign-in, the frontend's `/api/engine-token` route signs a 10-minute HS256 token with `WEB_AUTH_SECRET`, and the browser sends it to the engine. With the same secret set on the engine:
+
+- screening, job, batch, history and claim-signal routes return 401 without a valid token; `/api/health` and `/api/ready` stay public;
+- each account sees only its own jobs, batches and history, so rows saved before sign-in was switched on are no longer listed;
+- each account can screen `WEB_DAILY_FILE_LIMIT` files per UTC day (default 25). Rejected uploads don't count.
+
+Without `WEB_AUTH_SECRET` on the engine it runs open, as before. A secret shorter than 32 characters fails closed with 503. Frontend variables are listed in `frontend/.env.local.example`. Register the OAuth callback URLs against the production domain and set `NEXTAUTH_URL` to it.
+
 ## API and deployment
 
 The main legacy-compatible API uses `POST /api/analyze`, `GET /api/jobs/{job_id}`, `POST /api/batch/analyze`, `GET /api/batch/{batch_id}`, `POST /api/claims/signals` (stateless claim-level checks: timing, travel, shared identifiers, signal conflict, past findings), `GET /api/health`, and `GET /api/ready`. The durable path retains these job endpoints with authenticated, tenant-scoped reads and versioned internal queues. Its production mode disables routes that would bypass ownership, including arbitrary URL intake, public presigned uploads, synchronous analysis, and global analytics. Inspect `/docs` on the running service for its actual enabled contract.

@@ -8,6 +8,8 @@ import os
 
 from fastapi import HTTPException, Request
 
+from backend.web_auth import bearer_credential, verify_web_token
+
 
 def configured_tokens() -> dict[str, str] | None:
     raw = os.getenv("ANALYSIS_TOKENS_JSON", "")
@@ -27,6 +29,9 @@ def configured_tokens() -> dict[str, str] | None:
 
 
 def require_tenant(request: Request) -> str:
+    web_owner = verify_web_token(bearer_credential(request))
+    if web_owner is not None:
+        return web_owner
     tokens = configured_tokens()
     if tokens is None:
         raise HTTPException(status_code=503, detail="Analysis authentication is not configured")

@@ -23,6 +23,39 @@ export const setAccessToken = (token: string) => {
 	}
 };
 
+/* ---------- Sign-in token for the engine ---------- */
+
+const TOKEN_MARGIN_MS = 60_000;
+let engineToken: { value: string; expiresAt: number } | null = null;
+let pendingToken: Promise<string> | null = null;
+
+export const forgetEngineToken = () => {
+	engineToken = null;
+};
+
+const fetchEngineToken = async (): Promise<string> => {
+	const response = await fetch("/api/engine-token", { cache: "no-store" });
+	if (!response.ok) return "";
+	const body = (await response.json()) as { token?: string | null; expires_at?: number };
+	if (!body.token || !body.expires_at) return "";
+	engineToken = { value: body.token, expiresAt: body.expires_at };
+	return body.token;
+};
+
+/** A typed-in tenant token wins; otherwise the signed-in visitor's short-lived engine token. */
+const authorization = async (): Promise<string> => {
+	const manual = getAccessToken();
+	if (manual) return manual;
+	if (typeof window === "undefined") return "";
+	if (engineToken && engineToken.expiresAt - TOKEN_MARGIN_MS > Date.now()) return engineToken.value;
+	pendingToken ??= fetchEngineToken()
+		.catch(() => "")
+		.finally(() => {
+			pendingToken = null;
+		});
+	return pendingToken;
+};
+
 export class ApiError extends Error {
 	constructor(
 		message: string,
@@ -49,14 +82,17 @@ const detailMessage = (detail: unknown): string | null => {
 };
 
 const fallbackMessage = (status: number): string => {
-	if (status === 401) return "This engine needs an access token. Add it under Engine status.";
+	if (status === 401)
+		return getAccessToken()
+			? "The engine refused this access token. Change it under Engine status."
+			: "Your sign-in has expired. Reload the page to sign in again.";
 	if (status === 429) return "Too many requests. Wait a minute, then try again.";
 	if (status >= 500) return "The engine could not complete this request. Try again shortly.";
 	return `The engine rejected this request (HTTP ${status}).`;
 };
 
 export const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-	const token = getAccessToken();
+	const token = await authorization();
 	const headers = new Headers(init.headers);
 	if (token) headers.set("Authorization", `Bearer ${token}`);
 
@@ -67,6 +103,7 @@ export const request = async <T>(path: string, init: RequestInit = {}): Promise<
 		throw new ApiError("Could not reach the engine. Check your connection and try again.", 0);
 	}
 	if (!response.ok) {
+		if (response.status === 401) forgetEngineToken();
 		const body = await response.json().catch(() => null);
 		throw new ApiError(
 			detailMessage(body?.detail) ?? fallbackMessage(response.status),
@@ -77,7 +114,7 @@ export const request = async <T>(path: string, init: RequestInit = {}): Promise<
 };
 
 export const downloadFile = async (path: string, filename: string) => {
-	const token = getAccessToken();
+	const token = await authorization();
 	const response = await fetch(`${API_URL}${path}`, {
 		headers: token ? { Authorization: `Bearer ${token}` } : {},
 	}).catch(() => null);
