@@ -1,6 +1,6 @@
 import math
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 
 class MultimodalRiskScorer:
@@ -895,3 +895,171 @@ class ModalConflictDetector:
             "linear_fused_risk": round(linear_mean, 4),
             "adjusted_fused_risk": round(adjusted_risk, 4),
         }
+
+
+class BayesianCostSensitiveDecisionEngine:
+    """
+    Bayesian cost-sensitive risk decision engine.
+    Optimizes fraud mitigation actions by minimizing expected loss across
+    false positive churn, operational review expense, friction abandonment,
+    and direct chargeback losses.
+    """
+
+    POLICY_PRESETS: ClassVar[dict[str, dict[str, float]]] = {
+        "BALANCED": {
+            "churn_on_block_probability": 0.80,
+            "friction_drop_rate": 0.04,
+            "stepup_fraud_block_rate": 0.92,
+            "analyst_catch_rate": 0.96,
+            "analyst_false_reject_rate": 0.01,
+        },
+        "CONSERVATIVE": {
+            "churn_on_block_probability": 0.60,
+            "friction_drop_rate": 0.02,
+            "stepup_fraud_block_rate": 0.95,
+            "analyst_catch_rate": 0.98,
+            "analyst_false_reject_rate": 0.02,
+        },
+        "AGGRESSIVE_GROWTH": {
+            "churn_on_block_probability": 0.95,
+            "friction_drop_rate": 0.07,
+            "stepup_fraud_block_rate": 0.88,
+            "analyst_catch_rate": 0.94,
+            "analyst_false_reject_rate": 0.005,
+        },
+    }
+
+    def __init__(
+        self,
+        default_ltv: float = 250.0,
+        default_chargeback_fee: float = 25.0,
+        default_review_cost: float = 8.0,
+        policy_mode: str = "BALANCED",
+    ):
+        self.default_ltv = default_ltv
+        self.default_chargeback_fee = default_chargeback_fee
+        self.default_review_cost = default_review_cost
+        self.policy_mode = (
+            policy_mode if policy_mode in self.POLICY_PRESETS else "BALANCED"
+        )
+        self.params = self.POLICY_PRESETS[self.policy_mode]
+
+    def evaluate_transaction(
+        self,
+        fraud_probability: float,
+        transaction_amount: float,
+        customer_lifetime_value: float | None = None,
+        chargeback_fee: float | None = None,
+        review_operational_cost: float | None = None,
+        policy_override: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Calculates expected loss for each mitigation action and selects the optimal Bayes decision.
+        """
+        p = min(1.0, max(0.0, float(fraud_probability)))
+        amt = max(0.0, float(transaction_amount))
+        ltv = float(
+            customer_lifetime_value
+            if customer_lifetime_value is not None
+            else self.default_ltv
+        )
+        cb_fee = float(
+            chargeback_fee
+            if chargeback_fee is not None
+            else self.default_chargeback_fee
+        )
+        rev_cost = float(
+            review_operational_cost
+            if review_operational_cost is not None
+            else self.default_review_cost
+        )
+
+        policy = self.POLICY_PRESETS.get(
+            policy_override or self.policy_mode, self.params
+        )
+
+        # 1. APPROVE: Loss is incurred only if transaction is fraudulent (chargeback + direct amount)
+        loss_fraud = amt + cb_fee
+        e_approve = p * loss_fraud
+
+        # 2. BLOCK_TRANSACTION: Loss is customer churn if the customer is legitimate
+        p_legit = 1.0 - p
+        e_block = p_legit * policy["churn_on_block_probability"] * ltv
+
+        # 3. STEP_UP_CHALLENGE (e.g. 3D-Secure, Passkey, MFA, ID selfie):
+        # Legitimate users experience friction drop; fraud is partially mitigated
+        e_stepup = (
+            p_legit * (policy["friction_drop_rate"] * ltv)
+            + p * (1.0 - policy["stepup_fraud_block_rate"]) * loss_fraud
+        )
+
+        # 4. MANUAL_REVIEW:
+        # Operational review cost always incurred; analyst catch rate and false reject rate applied
+        e_review = (
+            rev_cost
+            + p * (1.0 - policy["analyst_catch_rate"]) * loss_fraud
+            + p_legit * policy["analyst_false_reject_rate"] * ltv
+        )
+
+        expected_losses = {
+            "APPROVE": round(e_approve, 4),
+            "STEP_UP_CHALLENGE": round(e_stepup, 4),
+            "MANUAL_REVIEW": round(e_review, 4),
+            "BLOCK_TRANSACTION": round(e_block, 4),
+        }
+
+        # Select minimal expected loss action
+        optimal_action = min(expected_losses, key=expected_losses.get)
+        min_loss = expected_losses[optimal_action]
+
+        # Naive rule baseline (0.50 cutoff: approve if <= 0.50 else block)
+        naive_action = "APPROVE" if p <= 0.50 else "BLOCK_TRANSACTION"
+        naive_loss = expected_losses[naive_action]
+        expected_savings = round(max(0.0, naive_loss - min_loss), 4)
+
+        rationale = self._generate_rationale(
+            optimal_action, p, amt, min_loss, expected_losses
+        )
+
+        return {
+            "optimal_action": optimal_action,
+            "fraud_probability": round(p, 4),
+            "transaction_amount": round(amt, 2),
+            "expected_losses": expected_losses,
+            "minimized_expected_loss": round(min_loss, 4),
+            "naive_threshold_action": naive_action,
+            "expected_savings_vs_naive": expected_savings,
+            "policy_mode": policy_override or self.policy_mode,
+            "decision_rationale": rationale,
+        }
+
+    def _generate_rationale(
+        self,
+        action: str,
+        p: float,
+        amt: float,
+        min_loss: float,
+        losses: dict[str, float],
+    ) -> str:
+        pct = round(p * 100, 1)
+        if action == "APPROVE":
+            return (
+                f"Approved: low estimated fraud probability ({pct}%) makes direct approval "
+                f"the lowest risk cost (${min_loss:.2f}) compared to user friction or review."
+            )
+        elif action == "STEP_UP_CHALLENGE":
+            return (
+                f"Step-Up Challenge required: at {pct}% fraud risk for ${amt:.2f}, "
+                f"automated step-up authentication minimizes loss (${min_loss:.2f}) "
+                f"by blocking {int(self.params['stepup_fraud_block_rate'] * 100)}% of fraud with low user drop-off."
+            )
+        elif action == "MANUAL_REVIEW":
+            return (
+                f"Escalated to Manual Analyst Review: high transaction value (${amt:.2f}) "
+                f"at {pct}% risk justifies operational review expense to minimize expected loss (${min_loss:.2f})."
+            )
+        else:  # BLOCK_TRANSACTION
+            return (
+                f"Blocked: acute fraud probability ({pct}%) on ${amt:.2f} transaction makes "
+                f"immediate block optimal (${min_loss:.2f}), avoiding imminent chargeback liability."
+            )
