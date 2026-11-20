@@ -1,5 +1,6 @@
 import bisect
 import math
+import re
 import time
 from typing import Any, ClassVar
 
@@ -1394,4 +1395,271 @@ class RiskPopulationDriftMonitor:
             "reference_stats": ref_stats,
             "current_stats": curr_stats,
             "bin_breakdown": bin_breakdown,
+        }
+
+
+class SyntheticIdentityScorer:
+    """
+    Evaluates applicant and claim identities for synthetic identity fraud (SIF) indicators.
+
+    Synthesizes signals from:
+    - Burner/disposable email domain recognition
+    - Shannon entropy & lexical randomness of email handle / username
+    - Name-to-email-handle semantic alignment
+    - Telephony carrier risk profiling (VOIP / virtual vs verified mobile)
+    - Profile tenure and creation recency
+    """
+
+    KNOWN_DISPOSABLE_DOMAINS: ClassVar[set[str]] = {
+        "mailinator.com",
+        "guerrillamail.com",
+        "tempmail.com",
+        "10minutemail.com",
+        "throwawaymail.com",
+        "sharklasers.com",
+        "yopmail.com",
+        "trashmail.com",
+        "dispostable.com",
+        "fakemailgenerator.com",
+        "mytemp.email",
+        "temp-mail.org",
+        "burnermail.io",
+        "inboxkitten.com",
+        "getairmail.com",
+    }
+
+    CARRIER_RISK_MAP: ClassVar[dict[str, float]] = {
+        "VOIP": 0.75,
+        "VIRTUAL": 0.70,
+        "PREPAID": 0.40,
+        "LANDLINE": 0.20,
+        "MOBILE": 0.05,
+        "POSTPAID": 0.05,
+        "UNKNOWN": 0.35,
+    }
+
+    def __init__(
+        self,
+        domain_weight: float = 0.35,
+        alignment_weight: float = 0.25,
+        entropy_weight: float = 0.20,
+        carrier_weight: float = 0.15,
+        tenure_weight: float = 0.05,
+    ):
+        weights = {
+            "domain": domain_weight,
+            "alignment": alignment_weight,
+            "entropy": entropy_weight,
+            "carrier": carrier_weight,
+            "tenure": tenure_weight,
+        }
+        total = sum(weights.values())
+        self.weights = {k: v / total for k, v in weights.items()}
+
+    @staticmethod
+    def calculate_shannon_entropy(text: str) -> float:
+        """
+        Calculates Shannon entropy (in bits) for the character distribution in a string.
+        H(X) = - sum(p_i * log2(p_i))
+        """
+        if not text:
+            return 0.0
+        n = len(text)
+        counts: dict[str, int] = {}
+        for ch in text.lower():
+            counts[ch] = counts.get(ch, 0) + 1
+
+        entropy = 0.0
+        for count in counts.values():
+            p = count / n
+            entropy -= p * math.log2(p)
+        return round(entropy, 4)
+
+    @staticmethod
+    def evaluate_handle_randomness(handle: str) -> float:
+        """
+        Assesses if an email handle resembles machine-generated random alphanumeric strings.
+        Combines Shannon entropy, digit ratio, and vowel deficit.
+        Returns a score in [0.0, 1.0].
+        """
+        clean_handle = re.sub(r"[._-]", "", handle.lower())
+        length = len(clean_handle)
+        if length < 3:
+            return 0.20
+
+        entropy = SyntheticIdentityScorer.calculate_shannon_entropy(clean_handle)
+        max_possible_entropy = math.log2(length) if length > 1 else 1.0
+        entropy_ratio = (
+            min(1.0, entropy / max_possible_entropy)
+            if max_possible_entropy > 0
+            else 0.0
+        )
+
+        digits_count = sum(1 for c in clean_handle if c.isdigit())
+        digit_ratio = digits_count / length
+
+        vowels = set("aeiou")
+        vowel_count = sum(1 for c in clean_handle if c in vowels)
+        vowel_ratio = vowel_count / length
+
+        randomness = 0.0
+        if entropy_ratio > 0.85 and length >= 6:
+            randomness += 0.40
+        elif entropy_ratio > 0.70:
+            randomness += 0.20
+
+        if digit_ratio > 0.40:
+            randomness += 0.35
+        elif digit_ratio > 0.20:
+            randomness += 0.15
+
+        if vowel_ratio < 0.15 and length >= 6:
+            randomness += 0.30
+
+        return round(min(1.0, randomness), 4)
+
+    @staticmethod
+    def compute_name_handle_alignment(name: str, handle: str) -> float:
+        """
+        Evaluates lexical alignment between declared full name and email handle.
+        Returns alignment score in [0.0, 1.0] where 1.0 is high alignment (e.g. aditya.malkar == Aditya Malkar)
+        and 0.0 is zero correlation / mismatch.
+        """
+        if not name or not handle:
+            return 0.5
+
+        clean_name = re.sub(r"[^a-zA-Z\s]", "", name.lower()).strip()
+        tokens = [t for t in clean_name.split() if len(t) >= 2]
+        if not tokens:
+            return 0.5
+
+        clean_handle = re.sub(r"[^a-zA-Z0-9]", "", handle.lower())
+        if not clean_handle:
+            return 0.5
+
+        matched_tokens = 0
+        for token in tokens:
+            if token in clean_handle:
+                matched_tokens += 1
+
+        if matched_tokens == len(tokens):
+            return 1.0
+
+        if len(tokens) >= 2:
+            initials_combo = tokens[0][0] + tokens[-1]
+            if initials_combo in clean_handle:
+                return 0.85
+            reverse_combo = tokens[-1] + tokens[0][0]
+            if reverse_combo in clean_handle:
+                return 0.80
+
+        if matched_tokens > 0:
+            return round(matched_tokens / len(tokens), 2)
+
+        return 0.0
+
+    def evaluate_identity(
+        self,
+        name: str,
+        email: str,
+        phone_carrier: str = "MOBILE",
+        account_age_days: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Runs comprehensive synthetic identity risk evaluation.
+        """
+        email_clean = email.strip().lower()
+        if "@" in email_clean:
+            handle, domain = email_clean.split("@", 1)
+        else:
+            handle = email_clean
+            domain = ""
+
+        flags: list[str] = []
+
+        # 1. Domain Risk
+        is_disposable = domain in self.KNOWN_DISPOSABLE_DOMAINS
+        if is_disposable:
+            flags.append(f"DISPOSABLE_BURNER_EMAIL_DOMAIN ({domain})")
+            domain_risk = 1.0
+        else:
+            domain_risk = 0.0
+
+        # 2. Handle Randomness Risk
+        handle_randomness = self.evaluate_handle_randomness(handle)
+        entropy = self.calculate_shannon_entropy(handle)
+        if handle_randomness >= 0.65:
+            flags.append("HIGH_ENTROPY_RANDOM_EMAIL_HANDLE")
+
+        # 3. Name Alignment Risk
+        alignment = self.compute_name_handle_alignment(name, handle)
+        alignment_risk = round(1.0 - alignment, 4)
+        if alignment_risk >= 0.80 and name.strip():
+            flags.append("NAME_EMAIL_IDENTITY_MISMATCH")
+
+        # 4. Carrier Risk
+        carrier_normalized = phone_carrier.strip().upper()
+        carrier_risk = self.CARRIER_RISK_MAP.get(carrier_normalized, 0.35)
+        if carrier_normalized in ("VOIP", "VIRTUAL"):
+            flags.append(f"HIGH_RISK_TELEPHONY_CARRIER ({carrier_normalized})")
+
+        # 5. Tenure Risk
+        if account_age_days is not None:
+            if account_age_days < 2:
+                tenure_risk = 0.70
+                flags.append("NEWLY_CREATED_ACCOUNT_UNDER_48H")
+            elif account_age_days < 14:
+                tenure_risk = 0.30
+            else:
+                tenure_risk = 0.0
+        else:
+            tenure_risk = 0.15
+
+        composite_score = (
+            self.weights["domain"] * domain_risk
+            + self.weights["alignment"] * alignment_risk
+            + self.weights["entropy"] * handle_randomness
+            + self.weights["carrier"] * carrier_risk
+            + self.weights["tenure"] * tenure_risk
+        )
+
+        if is_disposable:
+            composite_score = max(0.85, composite_score)
+
+        composite_score = round(min(1.0, composite_score), 4)
+
+        if composite_score < 0.25:
+            risk_tier = "LOW_RISK"
+            decision = "APPROVE"
+        elif composite_score < 0.55:
+            risk_tier = "ELEVATED_RISK"
+            decision = "MANUAL_REVIEW"
+        elif composite_score < 0.80:
+            risk_tier = "HIGH_RISK"
+            decision = "STEP_UP_VERIFICATION"
+        else:
+            risk_tier = "CRITICAL_SYNTHETIC_FRAUD"
+            decision = "REJECT"
+
+        return {
+            "synthetic_risk_score": composite_score,
+            "risk_tier": risk_tier,
+            "decision": decision,
+            "flags": flags,
+            "component_risks": {
+                "domain_risk": round(domain_risk, 4),
+                "handle_randomness_risk": handle_randomness,
+                "handle_entropy_bits": entropy,
+                "name_alignment_risk": alignment_risk,
+                "carrier_risk": round(carrier_risk, 4),
+                "tenure_risk": round(tenure_risk, 4),
+            },
+            "identity_metadata": {
+                "name": name,
+                "email_handle": handle,
+                "email_domain": domain,
+                "is_disposable_domain": is_disposable,
+                "phone_carrier": carrier_normalized,
+                "account_age_days": account_age_days,
+            },
         }
