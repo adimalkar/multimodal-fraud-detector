@@ -1,3 +1,4 @@
+import bisect
 import math
 import time
 from typing import Any, ClassVar
@@ -1193,3 +1194,204 @@ class PerceptualHashCollisionDetector:
             "top_collisions": cross_entity_collisions[:5],
         }
 
+
+class RiskPopulationDriftMonitor:
+    """
+    Monitors statistical distribution drift and concept shift between baseline (reference)
+    and production (current) populations of fraud risk scores.
+
+    Provides:
+    - Population Stability Index (PSI) calculation across binned score distributions.
+    - Wasserstein Distance (1D Earth Mover's Distance) measuring work to transform distributions.
+    - Drift alert tiers: STABLE (PSI < 0.10), MODERATE_DRIFT (0.10 <= PSI < 0.25),
+      and SIGNIFICANT_DRIFT (PSI >= 0.25).
+    - Population summary diagnostics (mean, standard deviation, median, drift delta).
+    """
+
+    def __init__(self, default_bins: int = 10, epsilon: float = 1e-4):
+        if default_bins < 2:
+            raise ValueError("default_bins must be at least 2")
+        self.default_bins = default_bins
+        self.epsilon = epsilon
+
+    @staticmethod
+    def _calculate_stats(scores: list[float]) -> dict[str, float]:
+        if not scores:
+            return {"count": 0, "mean": 0.0, "std": 0.0, "median": 0.0}
+        n = len(scores)
+        mean_val = sum(scores) / n
+        variance = sum((x - mean_val) ** 2 for x in scores) / n if n > 1 else 0.0
+        sorted_s = sorted(scores)
+        if n % 2 == 1:
+            median_val = sorted_s[n // 2]
+        else:
+            median_val = (sorted_s[n // 2 - 1] + sorted_s[n // 2]) / 2.0
+        return {
+            "count": n,
+            "mean": round(mean_val, 4),
+            "std": round(math.sqrt(variance), 4),
+            "median": round(median_val, 4),
+        }
+
+    @staticmethod
+    def compute_wasserstein_distance(
+        u_scores: list[float], v_scores: list[float]
+    ) -> float:
+        """
+        Computes 1D Wasserstein-1 (Earth Mover's) Distance between empirical sample distributions u and v:
+        W_1(u, v) = integral |F_u(x) - F_v(x)| dx
+        """
+        if not u_scores or not v_scores:
+            raise ValueError("Input score samples must not be empty")
+
+        u_sorted = sorted(u_scores)
+        v_sorted = sorted(v_scores)
+        all_vals = sorted(set(u_sorted + v_sorted))
+        if len(all_vals) <= 1:
+            return 0.0
+
+        n_u = len(u_sorted)
+        n_v = len(v_sorted)
+
+        total_work = 0.0
+        for i in range(len(all_vals) - 1):
+            x = all_vals[i]
+            x_next = all_vals[i + 1]
+            delta = x_next - x
+            # empirical CDF at x
+            f_u = bisect.bisect_right(u_sorted, x) / n_u
+            f_v = bisect.bisect_right(v_sorted, x) / n_v
+            total_work += abs(f_u - f_v) * delta
+
+        return round(total_work, 4)
+
+    def compute_psi(
+        self,
+        reference_scores: list[float],
+        current_scores: list[float],
+        num_bins: int | None = None,
+    ) -> tuple[float, list[dict[str, Any]]]:
+        """
+        Calculates Population Stability Index (PSI) between reference and current populations.
+        PSI = sum ( (Q_i - P_i) * ln(Q_i / P_i) )
+        """
+        if not reference_scores or not current_scores:
+            raise ValueError("Both reference and current populations must be non-empty")
+
+        bins_count = num_bins or self.default_bins
+        if bins_count < 2:
+            raise ValueError("Number of bins must be at least 2")
+
+        combined = reference_scores + current_scores
+        min_val = min(combined)
+        max_val = max(combined)
+
+        if math.isclose(min_val, max_val):
+            return 0.0, []
+
+        step = (max_val - min_val) / bins_count
+        bin_edges = [min_val + i * step for i in range(bins_count + 1)]
+        bin_edges[-1] = max_val
+
+        n_ref = len(reference_scores)
+        n_curr = len(current_scores)
+
+        ref_counts = [0] * bins_count
+        curr_counts = [0] * bins_count
+
+        for s in reference_scores:
+            idx = int((s - min_val) / step)
+            if idx >= bins_count:
+                idx = bins_count - 1
+            elif idx < 0:
+                idx = 0
+            ref_counts[idx] += 1
+
+        for s in current_scores:
+            idx = int((s - min_val) / step)
+            if idx >= bins_count:
+                idx = bins_count - 1
+            elif idx < 0:
+                idx = 0
+            curr_counts[idx] += 1
+
+        bin_details: list[dict[str, Any]] = []
+        total_psi = 0.0
+
+        for i in range(bins_count):
+            lower_edge = bin_edges[i]
+            upper_edge = bin_edges[i + 1]
+
+            p_raw = ref_counts[i] / n_ref
+            q_raw = curr_counts[i] / n_curr
+
+            p_smooth = (p_raw + self.epsilon) / (1.0 + bins_count * self.epsilon)
+            q_smooth = (q_raw + self.epsilon) / (1.0 + bins_count * self.epsilon)
+
+            bin_psi = (q_smooth - p_smooth) * math.log(q_smooth / p_smooth)
+            total_psi += bin_psi
+
+            range_label = (
+                f"[{round(lower_edge, 3)}, {round(upper_edge, 3)})"
+                if i < bins_count - 1
+                else f"[{round(lower_edge, 3)}, {round(upper_edge, 3)}]"
+            )
+
+            bin_details.append(
+                {
+                    "bin_index": i,
+                    "range": range_label,
+                    "reference_count": ref_counts[i],
+                    "current_count": curr_counts[i],
+                    "reference_pct": round(p_raw, 4),
+                    "current_pct": round(q_raw, 4),
+                    "bin_psi": round(bin_psi, 6),
+                }
+            )
+
+        return round(total_psi, 4), bin_details
+
+    def evaluate_drift(
+        self,
+        reference_scores: list[float],
+        current_scores: list[float],
+        num_bins: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Executes complete population drift analysis comparing baseline vs current scores.
+        """
+        psi_val, bin_breakdown = self.compute_psi(
+            reference_scores, current_scores, num_bins=num_bins
+        )
+        wasserstein = self.compute_wasserstein_distance(
+            reference_scores, current_scores
+        )
+        ref_stats = self._calculate_stats(reference_scores)
+        curr_stats = self._calculate_stats(current_scores)
+
+        mean_shift = round(curr_stats["mean"] - ref_stats["mean"], 4)
+
+        if psi_val < 0.10:
+            drift_level = "STABLE"
+            requires_retraining = False
+            action = "NO_ACTION_REQUIRED"
+        elif psi_val < 0.25:
+            drift_level = "MODERATE_DRIFT"
+            requires_retraining = False
+            action = "MONITOR_CLOSELY_AND_REVIEW_THRESHOLDS"
+        else:
+            drift_level = "SIGNIFICANT_DRIFT"
+            requires_retraining = True
+            action = "RETRAIN_MODEL_AND_RECALIBRATE_CUTOFFS"
+
+        return {
+            "psi": psi_val,
+            "wasserstein_distance": wasserstein,
+            "drift_level": drift_level,
+            "requires_retraining": requires_retraining,
+            "recommended_action": action,
+            "mean_shift": mean_shift,
+            "reference_stats": ref_stats,
+            "current_stats": curr_stats,
+            "bin_breakdown": bin_breakdown,
+        }
