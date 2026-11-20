@@ -1663,3 +1663,180 @@ class SyntheticIdentityScorer:
                 "account_age_days": account_age_days,
             },
         }
+
+
+class AdaptiveCutoffOptimizer:
+    """
+    Optimizes risk score classification thresholds (cutoffs) against operational constraints
+    such as False Positive Rate (FPR) budgets, minimum precision targets, financial cost matrices,
+    or maximal F1-score.
+    """
+
+    def __init__(self, step_size: float = 0.01):
+        if not (0.001 <= step_size <= 0.1):
+            raise ValueError("step_size must be between 0.001 and 0.1")
+        self.step_size = step_size
+
+    @staticmethod
+    def compute_metrics_at_threshold(
+        scores: list[float],
+        labels: list[bool | int],
+        threshold: float,
+        cost_fn: float = 500.0,
+        cost_fp: float = 20.0,
+    ) -> dict[str, Any]:
+        """
+        Computes TP, FP, TN, FN, Precision, Recall, FPR, F1, Accuracy, MCC, and Expected Cost at a given threshold.
+        """
+        if len(scores) != len(labels):
+            raise ValueError("scores and labels must have the same length")
+        if not scores:
+            raise ValueError("Scores and labels must not be empty")
+
+        tp = 0
+        fp = 0
+        tn = 0
+        fn = 0
+
+        for s, y in zip(scores, labels, strict=False):
+            pred_fraud = s >= threshold
+            actual_fraud = bool(y)
+            if pred_fraud and actual_fraud:
+                tp += 1
+            elif pred_fraud and not actual_fraud:
+                fp += 1
+            elif not pred_fraud and actual_fraud:
+                fn += 1
+            else:
+                tn += 1
+
+        total = tp + fp + tn + fn
+        positives = tp + fn
+        negatives = tn + fp
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
+        recall = tp / positives if positives > 0 else 0.0
+        fpr = fp / negatives if negatives > 0 else 0.0
+        accuracy = (tp + tn) / total if total > 0 else 0.0
+
+        if precision + recall > 0:
+            f1 = (2 * precision * recall) / (precision + recall)
+        else:
+            f1 = 0.0
+
+        mcc_denom = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        mcc = ((tp * tn) - (fp * fn)) / mcc_denom if mcc_denom > 0 else 0.0
+
+        total_cost = (fn * cost_fn) + (fp * cost_fp)
+
+        return {
+            "threshold": round(threshold, 4),
+            "tp": tp,
+            "fp": fp,
+            "tn": tn,
+            "fn": fn,
+            "precision": round(precision, 4),
+            "recall": round(recall, 4),
+            "fpr": round(fpr, 4),
+            "f1_score": round(f1, 4),
+            "accuracy": round(accuracy, 4),
+            "mcc": round(mcc, 4),
+            "expected_financial_cost": round(total_cost, 2),
+        }
+
+    def evaluate_threshold_curve(
+        self,
+        scores: list[float],
+        labels: list[bool | int],
+        cost_fn: float = 500.0,
+        cost_fp: float = 20.0,
+    ) -> list[dict[str, Any]]:
+        """
+        Sweeps threshold from 0.0 to 1.0 with self.step_size and returns metrics across the continuum.
+        """
+        results: list[dict[str, Any]] = []
+        steps = round(1.0 / self.step_size)
+        for i in range(steps + 1):
+            t = round(i * self.step_size, 4)
+            metrics = self.compute_metrics_at_threshold(
+                scores, labels, t, cost_fn=cost_fn, cost_fp=cost_fp
+            )
+            results.append(metrics)
+        return results
+
+    def optimize_cutoff(
+        self,
+        scores: list[float],
+        labels: list[bool | int],
+        strategy: str = "MAX_F1",
+        max_fpr: float | None = None,
+        min_precision: float | None = None,
+        cost_fn: float = 500.0,
+        cost_fp: float = 20.0,
+    ) -> dict[str, Any]:
+        """
+        Finds the optimal cutoff theta* subject to constraints or optimization objective.
+
+        Strategies:
+        - "MAX_F1": Maximizes harmonic mean of precision and recall.
+        - "FPR_BUDGET": Maximizes recall subject to FPR <= max_fpr (defaults to 0.02).
+        - "PRECISION_TARGET": Maximizes recall subject to Precision >= min_precision (defaults to 0.90).
+        - "MIN_COST": Minimizes expected financial operational losses (fn * cost_fn + fp * cost_fp).
+        """
+        curve = self.evaluate_threshold_curve(
+            scores, labels, cost_fn=cost_fn, cost_fp=cost_fp
+        )
+
+        baseline_metric = self.compute_metrics_at_threshold(
+            scores, labels, 0.50, cost_fn=cost_fn, cost_fp=cost_fp
+        )
+
+        optimal_entry: dict[str, Any] | None = None
+
+        if strategy == "FPR_BUDGET":
+            budget = max_fpr if max_fpr is not None else 0.02
+            eligible = [m for m in curve if m["fpr"] <= budget]
+            if eligible:
+                optimal_entry = max(
+                    eligible, key=lambda m: (m["recall"], m["f1_score"])
+                )
+            else:
+                optimal_entry = min(curve, key=lambda m: m["fpr"])
+
+        elif strategy == "PRECISION_TARGET":
+            target = min_precision if min_precision is not None else 0.90
+            eligible = [m for m in curve if m["precision"] >= target]
+            if eligible:
+                optimal_entry = max(
+                    eligible, key=lambda m: (m["recall"], m["f1_score"])
+                )
+            else:
+                optimal_entry = max(curve, key=lambda m: m["precision"])
+
+        elif strategy == "MIN_COST":
+            optimal_entry = min(curve, key=lambda m: m["expected_financial_cost"])
+
+        else:  # MAX_F1
+            optimal_entry = max(curve, key=lambda m: (m["f1_score"], m["precision"]))
+
+        opt_theta = optimal_entry["threshold"]
+        f1_delta = round(optimal_entry["f1_score"] - baseline_metric["f1_score"], 4)
+        cost_delta = round(
+            optimal_entry["expected_financial_cost"]
+            - baseline_metric["expected_financial_cost"],
+            2,
+        )
+
+        return {
+            "optimal_threshold": opt_theta,
+            "strategy": strategy,
+            "metrics_at_optimal": optimal_entry,
+            "baseline_threshold_0_5": baseline_metric,
+            "improvement": {
+                "f1_delta": f1_delta,
+                "financial_savings": round(-cost_delta, 2),
+            },
+            "recommendation": (
+                f"Calibrate operational decision cutoff to {opt_theta:.2f} under {strategy} policy."
+            ),
+        }
