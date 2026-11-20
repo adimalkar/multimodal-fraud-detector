@@ -1063,3 +1063,133 @@ class BayesianCostSensitiveDecisionEngine:
                 f"Blocked: acute fraud probability ({pct}%) on ${amt:.2f} transaction makes "
                 f"immediate block optimal (${min_loss:.2f}), avoiding imminent chargeback liability."
             )
+
+
+class PerceptualHashCollisionDetector:
+    """
+    Detects near-duplicate image collisions and document reuse attacks across accounts
+    using 64-bit perceptual difference hashing (dHash/aHash) and Hamming distance indexing.
+    """
+
+    def __init__(
+        self,
+        max_collision_hamming_distance: int = 10,
+        exact_match_threshold: int = 2,
+    ):
+        self.max_collision_hamming_distance = max_collision_hamming_distance
+        self.exact_match_threshold = exact_match_threshold
+        # entity_id -> list of {"image_id": str, "phash": int, "timestamp": float}
+        self.entity_records: dict[str, list[dict[str, Any]]] = {}
+        # list of {"entity_id": str, "image_id": str, "phash": int, "timestamp": float}
+        self.global_index: list[dict[str, Any]] = []
+
+    @staticmethod
+    def hamming_distance(hash1: int | str, hash2: int | str) -> int:
+        """
+        Computes the number of bit positions in which two 64-bit hashes differ.
+        Accepts integers or 16-character hexadecimal strings.
+        """
+        int1 = int(hash1, 16) if isinstance(hash1, str) else int(hash1)
+        int2 = int(hash2, 16) if isinstance(hash2, str) else int(hash2)
+        xor_result = int1 ^ int2
+        return xor_result.bit_count()
+
+    @staticmethod
+    def compute_similarity(
+        hash1: int | str, hash2: int | str, bit_length: int = 64
+    ) -> float:
+        """
+        Computes normalized perceptual similarity in range [0.0, 1.0].
+        """
+        dist = PerceptualHashCollisionDetector.hamming_distance(hash1, hash2)
+        return round(max(0.0, min(1.0, 1.0 - (dist / float(bit_length)))), 4)
+
+    def register_and_scan(
+        self,
+        entity_id: str,
+        image_id: str,
+        phash: int | str,
+        timestamp: float | None = None,
+    ) -> dict[str, Any]:
+        """
+        Registers an image perceptual hash and scans the index for cross-entity duplicate collisions.
+        """
+        now = timestamp if timestamp is not None else time.time()
+        hash_val = int(phash, 16) if isinstance(phash, str) else int(phash)
+
+        collisions = []
+        same_entity_duplicate = False
+
+        for entry in self.global_index:
+            dist = self.hamming_distance(hash_val, entry["phash"])
+            if dist <= self.max_collision_hamming_distance:
+                is_cross_entity = entry["entity_id"] != entity_id
+                similarity = round(1.0 - (dist / 64.0), 4)
+
+                collision_record = {
+                    "matched_entity_id": entry["entity_id"],
+                    "matched_image_id": entry["image_id"],
+                    "hamming_distance": dist,
+                    "similarity": similarity,
+                    "is_cross_entity": is_cross_entity,
+                    "matched_timestamp": entry["timestamp"],
+                }
+                collisions.append(collision_record)
+
+                if not is_cross_entity:
+                    same_entity_duplicate = True
+
+        collisions.sort(key=lambda c: c["hamming_distance"])
+        cross_entity_collisions = [c for c in collisions if c["is_cross_entity"]]
+
+        duplicate_detected = len(cross_entity_collisions) > 0
+        min_cross_dist = (
+            min([c["hamming_distance"] for c in cross_entity_collisions])
+            if cross_entity_collisions
+            else 64
+        )
+
+        if min_cross_dist <= self.exact_match_threshold:
+            severity = "CRITICAL_FRAUD"
+            risk_score = 0.95
+            flag = f"IDENTICAL_DOCUMENT_REUSE_DETECTED ({len(cross_entity_collisions)} cross-entity matches, dist={min_cross_dist})"
+        elif duplicate_detected:
+            severity = "HIGH_RISK"
+            sim_pct = round((1.0 - (min_cross_dist / 64.0)) * 100, 1)
+            risk_score = min(0.85, 0.50 + ((10 - min_cross_dist) * 0.035))
+            flag = f"NEAR_DUPLICATE_IMAGE_COLLISION ({sim_pct}% perceptual similarity, dist={min_cross_dist})"
+        elif same_entity_duplicate:
+            severity = "SUSPICIOUS"
+            risk_score = 0.30
+            flag = "SELF_RETRY_DUPLICATE_UPLOAD"
+        else:
+            severity = "LOW_RISK"
+            risk_score = 0.0
+            flag = "UNIQUE_DOCUMENT"
+
+        new_entry = {
+            "entity_id": entity_id,
+            "image_id": image_id,
+            "phash": hash_val,
+            "timestamp": now,
+        }
+        self.global_index.append(new_entry)
+        if entity_id not in self.entity_records:
+            self.entity_records[entity_id] = []
+        self.entity_records[entity_id].append(new_entry)
+
+        return {
+            "entity_id": entity_id,
+            "image_id": image_id,
+            "phash_hex": hex(hash_val),
+            "duplicate_detected": duplicate_detected,
+            "collision_count": len(cross_entity_collisions),
+            "nearest_collision_distance": (
+                min_cross_dist if duplicate_detected else None
+            ),
+            "severity_tier": severity,
+            "duplicate_risk_score": round(risk_score, 4),
+            "collision_flag": flag,
+            "top_collisions": cross_entity_collisions[:5],
+        }
+
