@@ -2,6 +2,7 @@ import bisect
 import math
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 
@@ -1839,4 +1840,189 @@ class AdaptiveCutoffOptimizer:
             "recommendation": (
                 f"Calibrate operational decision cutoff to {opt_theta:.2f} under {strategy} policy."
             ),
+        }
+
+
+class ForensicEventTimelineAligner:
+    """
+    Performs forensic cross-modal timeline and spatio-temporal causality verification across
+    claim incident declarations, photo EXIF captures, metadata modification events, and invoice issuance.
+
+    Detects:
+    - Pre-existing damage recycling (photo taken days/months prior to alleged loss event)
+    - Causality inversions (repair bill/invoice dated before loss event)
+    - Post-filing evidence fabrication (evidence captured after claim submission)
+    - Impossible physical transit velocity (Haversine speed between successive photo GPS tags)
+    """
+
+    EARTH_RADIUS_KM: ClassVar[float] = 6371.0
+
+    def __init__(
+        self,
+        pre_incident_tolerance_hours: float = 2.0,
+        max_transit_speed_kmh: float = 850.0,
+    ):
+        self.pre_incident_tolerance_hours = pre_incident_tolerance_hours
+        self.max_transit_speed_kmh = max_transit_speed_kmh
+
+    @staticmethod
+    def _parse_timestamp(ts: str | float | datetime) -> float:
+        """Parses various timestamp representations into Unix epoch seconds."""
+        if isinstance(ts, (int, float)):
+            return float(ts)
+        if isinstance(ts, datetime):
+            if ts.tzinfo is None:
+                return ts.replace(tzinfo=timezone.utc).timestamp()
+            return ts.timestamp()
+        if isinstance(ts, str):
+            clean_ts = ts.strip().replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(clean_ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except ValueError:
+                dt = datetime.strptime(f"{clean_ts[:19]} +0000", "%Y-%m-%d %H:%M:%S %z")
+                return dt.timestamp()
+        raise ValueError(f"Unsupported timestamp format: {ts}")
+
+    @staticmethod
+    def calculate_haversine_distance(
+        lat1: float, lon1: float, lat2: float, lon2: float
+    ) -> float:
+        """Calculates great-circle distance between two GPS coordinates in kilometers."""
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_phi = math.radians(lat2 - lat1)
+        delta_lambda = math.radians(lon2 - lon1)
+
+        a = (
+            math.sin(delta_phi / 2.0) ** 2
+            + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+        )
+        c = 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+        return ForensicEventTimelineAligner.EARTH_RADIUS_KM * c
+
+    def align_and_evaluate(
+        self,
+        incident_time: str | float | datetime,
+        filing_time: str | float | datetime | None = None,
+        evidence_events: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Evaluates temporal and spatial coherence of submitted evidence relative to incident and filing timestamps.
+        """
+        t_incident = self._parse_timestamp(incident_time)
+        t_filing = (
+            self._parse_timestamp(filing_time) if filing_time is not None else None
+        )
+
+        events = evidence_events or []
+        anomalies: list[dict[str, Any]] = []
+        flags: list[str] = []
+
+        parsed_events: list[dict[str, Any]] = []
+        for ev in events:
+            ev_ts = self._parse_timestamp(ev["timestamp"])
+            parsed_events.append({**ev, "epoch": ev_ts})
+
+        parsed_events.sort(key=lambda x: x["epoch"])
+
+        for ev in parsed_events:
+            ev_type = ev.get("event_type", "EVIDENCE").upper()
+            delta_incident_hours = (ev["epoch"] - t_incident) / 3600.0
+
+            if delta_incident_hours < -self.pre_incident_tolerance_hours:
+                hours_before = round(-delta_incident_hours, 2)
+                if ev_type in ("INVOICE", "ESTIMATE", "REPAIR"):
+                    flag = f"CAUSALITY_INVERSION_INVOICE_PREDATES_INCIDENT ({ev.get('event_id', 'unknown')} by {hours_before}h)"
+                    flags.append(flag)
+                    anomalies.append(
+                        {
+                            "event_id": ev.get("event_id"),
+                            "type": "CAUSALITY_INVERSION",
+                            "severity": 0.90,
+                            "description": flag,
+                        }
+                    )
+                elif ev_type in ("PHOTO", "IMAGE", "VIDEO"):
+                    flag = f"PRE_EXISTING_DAMAGE_PHOTO_RECYCLING ({ev.get('event_id', 'unknown')} taken {hours_before}h before incident)"
+                    flags.append(flag)
+                    anomalies.append(
+                        {
+                            "event_id": ev.get("event_id"),
+                            "type": "PRE_EXISTING_RECYCLING",
+                            "severity": 0.80 if hours_before > 24 else 0.50,
+                            "description": flag,
+                        }
+                    )
+
+            if t_filing is not None:
+                delta_filing_hours = (ev["epoch"] - t_filing) / 3600.0
+                if delta_filing_hours > 2.0 and ev_type in ("PHOTO", "IMAGE"):
+                    flag = f"POST_FILING_EVIDENCE_FABRICATION ({ev.get('event_id', 'unknown')} taken {round(delta_filing_hours, 1)}h after claim filing)"
+                    flags.append(flag)
+                    anomalies.append(
+                        {
+                            "event_id": ev.get("event_id"),
+                            "type": "POST_FILING_FABRICATION",
+                            "severity": 0.70,
+                            "description": flag,
+                        }
+                    )
+
+        gps_events = [e for e in parsed_events if e.get("gps") and len(e["gps"]) == 2]
+        for i in range(len(gps_events) - 1):
+            e1 = gps_events[i]
+            e2 = gps_events[i + 1]
+            time_diff_hours = (e2["epoch"] - e1["epoch"]) / 3600.0
+
+            if time_diff_hours > 0:
+                dist_km = self.calculate_haversine_distance(
+                    e1["gps"][0], e1["gps"][1], e2["gps"][0], e2["gps"][1]
+                )
+                speed_kmh = dist_km / time_diff_hours
+                if speed_kmh > self.max_transit_speed_kmh and dist_km > 20.0:
+                    flag = (
+                        f"IMPOSSIBLE_TRANSIT_VELOCITY ({round(speed_kmh, 1)} km/h between "
+                        f"{e1.get('event_id')} and {e2.get('event_id')}, distance={round(dist_km, 1)}km in {round(time_diff_hours * 60, 1)}m)"
+                    )
+                    flags.append(flag)
+                    anomalies.append(
+                        {
+                            "event_id": e2.get("event_id"),
+                            "type": "IMPOSSIBLE_TRANSIT_VELOCITY",
+                            "severity": 0.85,
+                            "description": flag,
+                            "speed_kmh": round(speed_kmh, 2),
+                        }
+                    )
+
+        if not anomalies:
+            timeline_risk_score = 0.0
+            severity_tier = "LOW_RISK"
+            decision = "VALID_TIMELINE"
+        else:
+            max_severity = max(a["severity"] for a in anomalies)
+            synergy = min(0.30, len(anomalies) * 0.05)
+            timeline_risk_score = round(min(1.0, max_severity + synergy), 4)
+
+            if timeline_risk_score >= 0.80:
+                severity_tier = "CRITICAL_FRAUD"
+                decision = "REJECT_AND_INVESTIGATE"
+            elif timeline_risk_score >= 0.50:
+                severity_tier = "HIGH_RISK"
+                decision = "STEP_UP_INSPECTION"
+            else:
+                severity_tier = "SUSPICIOUS"
+                decision = "MANUAL_REVIEW"
+
+        return {
+            "timeline_risk_score": timeline_risk_score,
+            "severity_tier": severity_tier,
+            "decision": decision,
+            "total_anomalies": len(anomalies),
+            "flags": flags,
+            "anomalies": anomalies,
+            "chronological_events_count": len(parsed_events),
         }
