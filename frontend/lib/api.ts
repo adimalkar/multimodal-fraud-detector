@@ -235,6 +235,35 @@ export interface ClaimEntity {
 	attributes: Record<string, string>;
 }
 
+export interface IdentityProfileInput {
+	entity_id?: string;
+	name: string;
+	email: string;
+	phone_carrier?: string;
+	account_age_days?: number;
+}
+
+export interface TimelineEvidenceInput {
+	event_id: string;
+	event_type: string;
+	timestamp: number;
+	lat?: number;
+	lon?: number;
+}
+
+export interface TimelineInput {
+	incident_time: number;
+	filing_time?: number;
+	evidence_events: TimelineEvidenceInput[];
+}
+
+export interface DocumentHashInput {
+	entity_id: string;
+	image_id: string;
+	phash: string;
+	timestamp?: number;
+}
+
 export interface ClaimSignalsRequest {
 	events?: ClaimEvent[];
 	entities?: ClaimEntity[];
@@ -245,6 +274,9 @@ export interface ClaimSignalsRequest {
 		timestamp: number;
 		clean_events_since?: number;
 	}>;
+	identities?: IdentityProfileInput[];
+	timeline?: TimelineInput;
+	hashes?: DocumentHashInput[];
 	as_of?: number;
 }
 
@@ -319,5 +351,43 @@ export interface ClaimSignals {
 				half_life_days: number;
 				clean_events_count: number;
 				rehabilitation_complete: boolean;
+		  }>;
+	identities:
+		| null
+		| Array<{
+				entity_id?: string;
+				synthetic_risk_score: number;
+				risk_tier: string;
+				decision: string;
+				flags: string[];
+				identity_metadata: {
+					name: string;
+					email_handle: string;
+					email_domain: string;
+					is_disposable_domain: boolean;
+					phone_carrier: string;
+					account_age_days: number | null;
+				};
+		  }>;
+	timeline: null | {
+		timeline_risk_score: number;
+		severity_tier: string;
+		decision: string;
+		total_anomalies: number;
+		flags: string[];
+		chronological_events_count: number;
+	};
+	hashes:
+		| null
+		| Array<{
+				entity_id: string;
+				image_id: string;
+				phash_hex: string;
+				duplicate_detected: boolean;
+				collision_count: number;
+				nearest_collision_distance: number | null;
+				severity_tier: string;
+				duplicate_risk_score: number;
+				collision_flag: string;
 		  }>;
 }

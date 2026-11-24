@@ -7,6 +7,9 @@ import {
 	type ClaimEvent,
 	type ClaimSignals as Signals,
 	type ClaimSignalsRequest,
+	type DocumentHashInput,
+	type IdentityProfileInput,
+	type TimelineInput,
 	request,
 } from "@/lib/api";
 import { percent } from "@/lib/format";
@@ -19,6 +22,9 @@ import { useEngine } from "./useEngine";
 const EVENT_HEADER = "claimant, time, latitude, longitude, device";
 const ENTITY_HEADER = "party, score 0-1, identifier=value, identifier=value";
 const HISTORY_HEADER = "party, score 0-1, date, clean claims since";
+const IDENTITY_HEADER = "party, name, email, carrier, account age days";
+const TIMELINE_HEADER = "evidence id, type (PHOTO|INVOICE), time, latitude, longitude";
+const HASH_HEADER = "party, document id, hex phash, time";
 
 const SAMPLE = {
 	events: [
@@ -34,6 +40,20 @@ const SAMPLE = {
 		"CL-4001, 0.1, bank=IE29-0999",
 	].join("\n"),
 	history: ["CL-1042, 0.9, 2026-02-20T00:00:00Z, 0", "CL-2077, 0.7, 2025-11-01T00:00:00Z, 3"].join("\n"),
+	identities: [
+		"CL-1042, Jordan Lee, z8q2x9k@mailinator.com, VOIP, 1",
+		"CL-2077, Morgan Hayes, morgan.hayes@gmail.com, MOBILE, 420",
+	].join("\n"),
+	incidentTime: "2026-03-12T08:00:00Z",
+	filingTime: "2026-03-12T10:00:00Z",
+	timelineEvents: [
+		"doc-1, PHOTO, 2026-02-01T12:00:00Z, 40.71, -74.01",
+		"inv-1, INVOICE, 2026-03-11T17:00:00Z",
+	].join("\n"),
+	hashes: [
+		"CL-2077, doc-1, 0f0f0f0f0f0f0f0f, 2026-03-12T08:30:00Z",
+		"CL-1042, doc-9, 0f0f0f0f0f0f0f0e, 2026-03-12T09:05:00Z",
+	].join("\n"),
 	asOf: "2026-03-12",
 	visual: 0.9,
 	text: 0.1,
@@ -97,6 +117,66 @@ const parseHistory = (text: string) =>
 			risk_score: number(score, where),
 			timestamp: seconds(date, where),
 			clean_events_since: clean ? number(clean, where) : 0,
+		};
+	});
+
+const parseIdentities = (text: string): IdentityProfileInput[] =>
+	rows(text).map(({ cells, line }) => {
+		const where = `Identities, line ${line}`;
+		const [entity_id, name, email, carrier, age] = cells;
+		if (!entity_id || !name || !email) {
+			throw new RowError(`${where}: add a party, name and email.`);
+		}
+		return {
+			entity_id,
+			name,
+			email,
+			phone_carrier: carrier || "MOBILE",
+			...(age ? { account_age_days: Math.round(number(age, where)) } : {}),
+		};
+	});
+
+const parseTimeline = (incident: string, filing: string, text: string): TimelineInput | undefined => {
+	const evidenceRows = rows(text);
+	if (!incident.trim() && evidenceRows.length === 0) return undefined;
+	if (!incident.trim()) {
+		throw new RowError("Timeline audit: enter an incident date/time to audit evidence events.");
+	}
+	const evidence_events = evidenceRows.map(({ cells, line }) => {
+		const where = `Timeline events, line ${line}`;
+		const [event_id, event_type, time, lat, lon] = cells;
+		if (!event_id || !event_type || !time) {
+			throw new RowError(`${where}: add an evidence id, type and time.`);
+		}
+		if ((lat && !lon) || (!lat && lon)) {
+			throw new RowError(`${where}: provide both latitude and longitude together.`);
+		}
+		return {
+			event_id,
+			event_type,
+			timestamp: seconds(time, where),
+			...(lat && lon ? { lat: number(lat, where), lon: number(lon, where) } : {}),
+		};
+	});
+	return {
+		incident_time: seconds(incident.trim(), "Timeline incident time"),
+		...(filing.trim() ? { filing_time: seconds(filing.trim(), "Timeline filing time") } : {}),
+		evidence_events,
+	};
+};
+
+const parseHashes = (text: string): DocumentHashInput[] =>
+	rows(text).map(({ cells, line }) => {
+		const where = `Document hashes, line ${line}`;
+		const [entity_id, image_id, phash, time] = cells;
+		if (!entity_id || !image_id || !phash) {
+			throw new RowError(`${where}: add a party, document id and perceptual hash.`);
+		}
+		return {
+			entity_id,
+			image_id,
+			phash,
+			...(time ? { timestamp: seconds(time, where) } : {}),
 		};
 	});
 
@@ -277,6 +357,63 @@ const Results = ({ data }: { data: Signals }) => (
 				))}
 			</Table>
 		</Result>
+
+		<Result title="Synthetic identities" skipped={!data.identities}>
+			<Table heads={["Party", "Name", "Domain & carrier", "Score", "Signals"]}>
+				{data.identities?.map((item, idx) => (
+					<tr key={`${item.entity_id ?? item.identity_metadata.email_handle}-${idx}`}>
+						<td className="font-data">{item.entity_id ?? "–"}</td>
+						<td>{item.identity_metadata.name}</td>
+						<td className="font-data text-xs">
+							{item.identity_metadata.email_domain || "unknown"} ({item.identity_metadata.phone_carrier})
+						</td>
+						<td className="font-bold">{percent(item.synthetic_risk_score)}</td>
+						<td className="space-x-1">
+							<Flag on={item.synthetic_risk_score >= 0.55} yes={item.risk_tier} no={item.risk_tier} />
+						</td>
+					</tr>
+				))}
+			</Table>
+		</Result>
+
+		<Result title="Incident timeline audit" skipped={!data.timeline}>
+			{data.timeline && (
+				<>
+					<p className="flex flex-wrap items-center gap-3">
+						<Flag
+							on={data.timeline.total_anomalies > 0}
+							yes={`${data.timeline.total_anomalies} anomaly findings (${data.timeline.severity_tier})`}
+							no="Timeline coherent"
+						/>
+						<span className="font-data text-sm">Risk {percent(data.timeline.timeline_risk_score)}</span>
+					</p>
+					{data.timeline.flags.length > 0 && (
+						<ul className="mt-3 grid gap-1.5 font-data text-xs text-muted">
+							{data.timeline.flags.map((flag) => (
+								<li key={flag} className="border-l-2 border-uv pl-2">{flag}</li>
+							))}
+						</ul>
+					)}
+				</>
+			)}
+		</Result>
+
+		<Result title="Document hash collisions" skipped={!data.hashes}>
+			<Table heads={["Party", "Document", "Perceptual hash", "Min distance", "Score", "Status"]}>
+				{data.hashes?.map((item) => (
+					<tr key={`${item.entity_id}-${item.image_id}`}>
+						<td className="font-data">{item.entity_id}</td>
+						<td className="font-data">{item.image_id}</td>
+						<td className="font-data text-xs">{item.phash_hex}</td>
+						<td>{item.nearest_collision_distance ?? "–"}</td>
+						<td className="font-bold">{percent(item.duplicate_risk_score)}</td>
+						<td>
+							<Flag on={item.duplicate_detected} yes={item.severity_tier} no="UNIQUE" />
+						</td>
+					</tr>
+				))}
+			</Table>
+		</Result>
 	</div>
 );
 
@@ -285,6 +422,11 @@ const ClaimSignals = () => {
 	const [events, setEvents] = useState("");
 	const [entities, setEntities] = useState("");
 	const [history, setHistory] = useState("");
+	const [identities, setIdentities] = useState("");
+	const [incidentTime, setIncidentTime] = useState("");
+	const [filingTime, setFilingTime] = useState("");
+	const [timelineEvents, setTimelineEvents] = useState("");
+	const [hashes, setHashes] = useState("");
 	const [asOf, setAsOf] = useState(() => new Date().toISOString().slice(0, 10));
 	const [useScores, setUseScores] = useState(false);
 	const [visual, setVisual] = useState(0.5);
@@ -294,12 +436,25 @@ const ClaimSignals = () => {
 	const [error, setError] = useState<string | null>(null);
 	const [running, setRunning] = useState(false);
 
-	const empty = !events.trim() && !entities.trim() && !history.trim() && !useScores;
+	const empty =
+		!events.trim() &&
+		!entities.trim() &&
+		!history.trim() &&
+		!identities.trim() &&
+		!incidentTime.trim() &&
+		!timelineEvents.trim() &&
+		!hashes.trim() &&
+		!useScores;
 
 	const loadSample = () => {
 		setEvents(SAMPLE.events);
 		setEntities(SAMPLE.entities);
 		setHistory(SAMPLE.history);
+		setIdentities(SAMPLE.identities);
+		setIncidentTime(SAMPLE.incidentTime);
+		setFilingTime(SAMPLE.filingTime);
+		setTimelineEvents(SAMPLE.timelineEvents);
+		setHashes(SAMPLE.hashes);
 		setAsOf(SAMPLE.asOf);
 		setUseScores(true);
 		setVisual(SAMPLE.visual);
@@ -315,10 +470,14 @@ const ClaimSignals = () => {
 		setResult(null);
 		let body: ClaimSignalsRequest;
 		try {
+			const timeline = parseTimeline(incidentTime, filingTime, timelineEvents);
 			body = {
 				events: parseEvents(events),
 				entities: parseEntities(entities),
 				prior_findings: parseHistory(history),
+				identities: parseIdentities(identities),
+				...(timeline ? { timeline } : {}),
+				hashes: parseHashes(hashes),
 				as_of: seconds(asOf, "Measure history as of"),
 				...(useScores ? { modality_scores: { visual, text, metadata } } : {}),
 			};
@@ -349,7 +508,7 @@ const ClaimSignals = () => {
 		<Page>
 			<PageTitle
 				title="Claim signals"
-				lede="Look across a claim’s activity for timing bursts, impossible travel, shared identifiers and signals that disagree. Fill in what you have. Empty sections are skipped."
+				lede="Look across a claim’s activity for timing bursts, impossible travel, shared identifiers, synthetic identities, timeline causality and duplicate hashes. Fill in what you have. Empty sections are skipped."
 				actions={<button type="button" className="btn-quiet" onClick={loadSample}>Load sample data</button>}
 			/>
 			<form onSubmit={run} className="grid gap-6">
@@ -377,6 +536,21 @@ const ClaimSignals = () => {
 							</div>
 						)}
 					</fieldset>
+					<Rows id="identities" title="Identity profiles" hint="Check email randomness, disposable domains and carrier risk." header={IDENTITY_HEADER} value={identities} onChange={setIdentities} />
+					<Rows id="hashes" title="Document hashes" hint="Detect reused or near-duplicate document hashes across parties." header={HASH_HEADER} value={hashes} onChange={setHashes} />
+					<div className="lg:col-span-2">
+						<Rows id="timeline" title="Incident timeline audit" hint="Check photo capture and invoice timestamps against the incident and filing dates." header={TIMELINE_HEADER} value={timelineEvents} onChange={setTimelineEvents} />
+						<div className="mt-2 flex flex-wrap gap-4">
+							<label className="flex items-center gap-2">
+								<span>Incident time</span>
+								<input type="text" placeholder="2026-03-12T08:00:00Z" value={incidentTime} onChange={(event) => setIncidentTime(event.target.value)} className="field !w-56 font-data text-sm" />
+							</label>
+							<label className="flex items-center gap-2">
+								<span>Filing time (optional)</span>
+								<input type="text" placeholder="2026-03-12T10:00:00Z" value={filingTime} onChange={(event) => setFilingTime(event.target.value)} className="field !w-56 font-data text-sm" />
+							</label>
+						</div>
+					</div>
 				</div>
 				{error && <Notice tone="error" title="The checks didn’t run">{error}</Notice>}
 				{state === "offline" && <Notice tone="warn" title="The engine isn’t responding">It may be restarting. This page checks again every 30 seconds.</Notice>}
