@@ -63,6 +63,8 @@ def test_sections_without_input_are_null_rather_than_clean(client):
     assert data["identities"] is None
     assert data["timeline"] is None
     assert data["hashes"] is None
+    assert data["decision"] is None
+    assert data["drift"] is None
     assert data["conflict"]["conflict_tier"] == "CONGRUENT"
 
 
@@ -173,6 +175,36 @@ def test_identity_timeline_and_hash_signals_run_statelessly(client):
     ]}},
     {"hashes": [{"entity_id": "e-1", "image_id": "img-1", "phash": "not-hex-zzzz"}]},
     {"hashes": [{"entity_id": "e-1", "image_id": "img-1", "phash": "0" * 19}]},
+    {"decision": {"fraud_probability": 0.4, "transaction_amount": -10}},
+    {"decision": {"fraud_probability": 0.4, "transaction_amount": 100, "policy_mode": "INVALID_MODE"}},
+    {"drift": {"reference_scores": [0.1], "current_scores": [0.2, 0.3]}},
+    {"drift": {"reference_scores": [0.1, 0.2], "current_scores": [0.2, 0.3], "num_bins": 1}},
 ])
 def test_invalid_forensic_signal_inputs_return_422(client, payload):
     assert client.post("/api/claims/signals", json=payload).status_code == 422
+
+
+def test_decision_and_population_drift_signals(client):
+    response = client.post("/api/claims/signals", json={
+        "decision": {
+            "fraud_probability": 0.85,
+            "transaction_amount": 2500.0,
+            "policy_mode": "STRICT_FRAUD_CONTROL",
+        },
+        "drift": {
+            "reference_scores": [0.05, 0.10, 0.12, 0.15, 0.08] * 5,
+            "current_scores": [0.75, 0.82, 0.88, 0.91, 0.95] * 5,
+            "num_bins": 5,
+        },
+    })
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["velocity"] is None
+    assert data["decision"]["optimal_action"] == "BLOCK_TRANSACTION"
+    assert data["decision"]["policy_mode"] == "STRICT_FRAUD_CONTROL"
+    assert data["decision"]["minimized_expected_loss"] >= 0.0
+
+    assert data["drift"]["drift_level"] == "SIGNIFICANT_DRIFT"
+    assert data["drift"]["requires_retraining"] is True
+    assert data["drift"]["psi"] >= 0.25
