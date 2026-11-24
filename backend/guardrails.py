@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 from fastapi import HTTPException, Request, UploadFile
@@ -29,16 +30,23 @@ class InMemoryRateLimiter:
     Automatically purges expired client windows to prevent memory leaks.
     """
 
-    def __init__(self, default_limit: int = DEFAULT_RATE_LIMIT, window_seconds: int = 60):
+    def __init__(
+        self,
+        default_limit: int = DEFAULT_RATE_LIMIT,
+        window_seconds: int = 60,
+        max_tracked_clients: int = 10_000,
+    ):
         self.default_limit = default_limit
         self.window_seconds = window_seconds
+        self.max_tracked_clients = max(1, max_tracked_clients)
         # client_ip -> list of timestamps
         self._requests: dict[str, list[float]] = {}
         self._last_cleanup = time.time()
+        self._lock = threading.Lock()
 
-    def _cleanup_old_records(self, now: float):
+    def _cleanup_old_records(self, now: float, force: bool = False):
         """Purge entries older than the window to keep memory flat."""
-        if now - self._last_cleanup < 60:
+        if not force and now - self._last_cleanup < 60:
             return
         cutoff = now - self.window_seconds
         stale_ips = []
@@ -57,32 +65,42 @@ class InMemoryRateLimiter:
         Checks if the request is permitted.
         Returns: (is_allowed, remaining_requests, retry_after_seconds)
         """
-        now = time.time()
-        self._cleanup_old_records(now)
-
         limit_to_use = limit if limit is not None else self.default_limit
+        if limit_to_use <= 0:
+            return False, 0, max(1, int(self.window_seconds))
+
+        now = time.time()
         cutoff = now - self.window_seconds
+        with self._lock:
+            self._cleanup_old_records(now)
 
-        timestamps = self._requests.get(client_id, [])
-        # Filter timestamps within current window
-        valid_ts = [t for t in timestamps if t > cutoff]
+            if client_id not in self._requests and len(self._requests) >= self.max_tracked_clients:
+                self._cleanup_old_records(now, force=True)
+                while len(self._requests) >= self.max_tracked_clients:
+                    oldest_client = next(iter(self._requests))
+                    self._requests.pop(oldest_client, None)
 
-        if len(valid_ts) >= limit_to_use:
-            # Rate limit exceeded
-            oldest_in_window = valid_ts[0]
-            retry_after = max(1, int(self.window_seconds - (now - oldest_in_window)))
+            timestamps = self._requests.get(client_id, [])
+            # Filter timestamps within current window
+            valid_ts = [t for t in timestamps if t > cutoff]
+
+            if len(valid_ts) >= limit_to_use:
+                # Rate limit exceeded
+                oldest_in_window = valid_ts[0]
+                retry_after = max(1, int(self.window_seconds - (now - oldest_in_window)))
+                self._requests[client_id] = valid_ts
+                return False, 0, retry_after
+
+            # Record new request
+            valid_ts.append(now)
             self._requests[client_id] = valid_ts
-            return False, 0, retry_after
-
-        # Record new request
-        valid_ts.append(now)
-        self._requests[client_id] = valid_ts
-        remaining = max(0, limit_to_use - len(valid_ts))
-        return True, remaining, 0
+            remaining = max(0, limit_to_use - len(valid_ts))
+            return True, remaining, 0
 
     def reset(self):
         """Clears all tracked requests (useful in tests)."""
-        self._requests.clear()
+        with self._lock:
+            self._requests.clear()
 
 
 # Global rate limiter instance
@@ -93,11 +111,15 @@ def get_client_ip(request: Request) -> str:
     """Extracts client IP from proxy headers (Cloudflare, Vercel, Render) or direct connection."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        # First IP in list is original client
-        return forwarded.split(",")[0].strip()
+        # First non-empty IP in list is original client
+        candidate = forwarded.split(",")[0].strip()
+        if candidate:
+            return candidate
     cf_ip = request.headers.get("cf-connecting-ip")
     if cf_ip:
-        return cf_ip.strip()
+        candidate = cf_ip.strip()
+        if candidate:
+            return candidate
     if request.client and request.client.host:
         return request.client.host
     return "127.0.0.1"
@@ -173,7 +195,11 @@ def validate_batch_size(files: list[UploadFile]):
 DANGEROUS_EXECUTABLE_SIGNATURES = [
     (b"MZ", "Windows PE executable (EXE/DLL)"),
     (b"\x7fELF", "Linux ELF binary executable"),
-    (b"\xca\xfe\xba\xbe", "Compiled binary bytecode"),
+    (b"\xca\xfe\xba\xbe", "Compiled binary bytecode / Mach-O universal"),
+    (b"\xfe\xed\xfa\xce", "macOS Mach-O 32-bit executable"),
+    (b"\xfe\xed\xfa\xcf", "macOS Mach-O 64-bit executable"),
+    (b"\xcf\xfa\xed\xfe", "macOS Mach-O little-endian executable"),
+    (b"#!", "Executable script shebang"),
 ]
 
 

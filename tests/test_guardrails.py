@@ -1,8 +1,9 @@
 import io
 import pytest
+from starlette.requests import Request
 from starlette.testclient import TestClient
 from backend.app import app
-from backend.guardrails import rate_limiter, InMemoryRateLimiter, MAX_BATCH_SIZE
+from backend.guardrails import get_client_ip, rate_limiter, InMemoryRateLimiter, MAX_BATCH_SIZE
 
 client = TestClient(app)
 
@@ -120,3 +121,37 @@ def test_rate_limit_http_429():
         assert "Retry-After" in r3.headers
     finally:
         rate_limiter.default_limit = 60
+
+
+def test_rate_limiter_zero_limit_and_cardinality_cap():
+    limiter = InMemoryRateLimiter(default_limit=0, window_seconds=45)
+    allowed, rem, retry_after = limiter.check("10.0.0.1")
+    assert allowed is False
+    assert rem == 0
+    assert retry_after == 45
+
+    bounded = InMemoryRateLimiter(default_limit=5, window_seconds=60, max_tracked_clients=3)
+    for idx in range(5):
+        bounded.check(f"198.51.100.{idx}")
+    assert len(bounded._requests) <= 3
+    assert "198.51.100.4" in bounded._requests
+
+
+def test_get_client_ip_skips_empty_proxy_headers():
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", b" , "), (b"cf-connecting-ip", b" 203.0.113.9 ")],
+        "client": ("10.1.1.5", 12345),
+    }
+    assert get_client_ip(Request(scope)) == "203.0.113.9"
+
+    fallback_scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"x-forwarded-for", b"   ")],
+        "client": ("10.1.1.5", 12345),
+    }
+    assert get_client_ip(Request(fallback_scope)) == "10.1.1.5"
