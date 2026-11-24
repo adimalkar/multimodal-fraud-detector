@@ -11,6 +11,112 @@ SUSPICIOUS_SOFTWARE_KEYWORDS = [
     "facetune", "remini", "vanceai", "ilovepdf", "sejda", "smallpdf"
 ]
 
+_PDF_SIMPLE_ESCAPES = {
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "b": "\b",
+    "f": "\f",
+    "(": "(",
+    ")": ")",
+    "\\": "\\",
+}
+
+
+def _clean_exif_text(value: Any) -> str | None:
+    """Normalize raw EXIF tag values (bytes/NUL-padded strings) into clean text."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="ignore")
+    else:
+        text = str(value)
+    cleaned = text.replace("\x00", "").strip()
+    return cleaned or None
+
+
+def _decode_pdf_bytes(raw_bytes: bytes) -> str | None:
+    """Decode PDF byte sequences (UTF-16BE BOM, UTF-8, or PDFDoc/Latin-1)."""
+    if raw_bytes.startswith(b"\xfe\xff"):
+        text = raw_bytes[2:].decode("utf-16-be", errors="ignore")
+    else:
+        try:
+            text = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text = raw_bytes.decode("latin-1", errors="ignore")
+    cleaned = text.replace("\x00", "").strip()
+    return cleaned or None
+
+
+def _decode_pdf_literal(raw: str) -> str | None:
+    """Decode PDF literal string escapes (including octal sequences like \\056)."""
+    out = bytearray()
+    i = 0
+    n = len(raw)
+    while i < n:
+        ch = raw[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = raw[i + 1]
+            if nxt in "\r\n":
+                # Backslash immediately before newline is a line continuation.
+                i += 3 if (nxt == "\r" and i + 2 < n and raw[i + 2] == "\n") else 2
+                continue
+            if nxt in _PDF_SIMPLE_ESCAPES:
+                out.extend(_PDF_SIMPLE_ESCAPES[nxt].encode("latin-1"))
+                i += 2
+                continue
+            if "0" <= nxt <= "7":
+                end = min(i + 4, n)
+                j = i + 2
+                while j < end and "0" <= raw[j] <= "7":
+                    j += 1
+                out.append(int(raw[i + 1 : j], 8) & 0xFF)
+                i = j
+                continue
+            out.extend(nxt.encode("latin-1", errors="ignore"))
+            i += 2
+        else:
+            out.extend(ch.encode("latin-1", errors="ignore"))
+            i += 1
+    return _decode_pdf_bytes(bytes(out))
+
+
+def _extract_pdf_info_field(content_sample: str, key: str) -> str | None:
+    """Extract and decode a PDF Info dictionary field written as (...) or <hex>."""
+    match = re.search(rf"/{re.escape(key)}\b\s*(?!<<)([(<])", content_sample)
+    if not match:
+        return None
+    opener = match.group(1)
+    start = match.end()
+
+    if opener == "(":
+        depth = 1
+        i = start
+        n = len(content_sample)
+        while i < n and depth > 0:
+            ch = content_sample[i]
+            if ch == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return _decode_pdf_literal(content_sample[start:i])
+            i += 1
+        return None
+
+    end_idx = content_sample.find(">", start)
+    if end_idx == -1:
+        return None
+    hex_digits = re.sub(r"\s+", "", content_sample[start:end_idx])
+    if not hex_digits or not re.fullmatch(r"[0-9a-fA-F]+", hex_digits):
+        return None
+    if len(hex_digits) % 2 == 1:
+        hex_digits += "0"
+    return _decode_pdf_bytes(bytes.fromhex(hex_digits))
+
 def extract_image_metadata(file_path: str) -> Dict[str, Any]:
     """Extract image metadata and unverified contextual observations."""
     flags: List[str] = []
@@ -42,16 +148,20 @@ def extract_image_metadata(file_path: str) -> Dict[str, Any]:
                     tag_name = TAGS.get(tag_id, str(tag_id))
                     parsed_exif[tag_name] = value
 
-                meta["software"] = parsed_exif.get("Software") or parsed_exif.get("ProcessingSoftware")
-                meta["camera_make"] = parsed_exif.get("Make")
-                meta["camera_model"] = parsed_exif.get("Model")
-                meta["created_at"] = parsed_exif.get("DateTimeOriginal") or parsed_exif.get("DateTimeDigitized")
-                meta["modified_at"] = parsed_exif.get("DateTime")
+                meta["software"] = _clean_exif_text(
+                    parsed_exif.get("Software") or parsed_exif.get("ProcessingSoftware")
+                )
+                meta["camera_make"] = _clean_exif_text(parsed_exif.get("Make"))
+                meta["camera_model"] = _clean_exif_text(parsed_exif.get("Model"))
+                meta["created_at"] = _clean_exif_text(
+                    parsed_exif.get("DateTimeOriginal") or parsed_exif.get("DateTimeDigitized")
+                )
+                meta["modified_at"] = _clean_exif_text(parsed_exif.get("DateTime"))
                 meta["has_gps"] = "GPSInfo" in parsed_exif
 
                 # Software tags are editable and do not authenticate the file.
                 if meta["software"]:
-                    software_str = str(meta["software"]).strip()
+                    software_str = meta["software"]
                     for keyword in SUSPICIOUS_SOFTWARE_KEYWORDS:
                         if keyword in software_str.lower():
                             flags.append(f"Software tag reports {software_str}; this tag is not independently verified")
@@ -97,22 +207,10 @@ def extract_pdf_metadata(file_path: str) -> Dict[str, Any]:
 
         content_sample = b"\n".join(chunks).decode("latin-1", errors="ignore")
 
-        # Scan for /Creator and /Producer
-        creator_match = re.search(r"/Creator\s*\((.*?)\)", content_sample)
-        if creator_match:
-            meta["creator"] = creator_match.group(1).strip()
-
-        producer_match = re.search(r"/Producer\s*\((.*?)\)", content_sample)
-        if producer_match:
-            meta["producer"] = producer_match.group(1).strip()
-
-        date_match = re.search(r"/CreationDate\s*\((.*?)\)", content_sample)
-        if date_match:
-            meta["creation_date"] = date_match.group(1).strip()
-
-        mod_match = re.search(r"/ModDate\s*\((.*?)\)", content_sample)
-        if mod_match:
-            meta["mod_date"] = mod_match.group(1).strip()
+        meta["creator"] = _extract_pdf_info_field(content_sample, "Creator")
+        meta["producer"] = _extract_pdf_info_field(content_sample, "Producer")
+        meta["creation_date"] = _extract_pdf_info_field(content_sample, "CreationDate")
+        meta["mod_date"] = _extract_pdf_info_field(content_sample, "ModDate")
 
         # Editing tools and conversion services are routine in valid PDFs.
         combined_tools = f"{meta.get('creator') or ''} {meta.get('producer') or ''}".lower()
@@ -144,6 +242,7 @@ def extract_video_metadata(file_path: str) -> Dict[str, Any]:
         "duration_seconds": 0
     }
 
+    cap = None
     try:
         import cv2
         cap = cv2.VideoCapture(file_path)
@@ -162,12 +261,13 @@ def extract_video_metadata(file_path: str) -> Dict[str, Any]:
             # Low frame rate occurs in genuine CCTV and exported clips.
             if 0 < fps < 15:
                 flags.append(f"Video frame rate is {fps:.1f} FPS; frame rate alone does not establish origin")
-
-            cap.release()
         else:
             flags.append("Failed to decode video container stream")
     except Exception as e:
         flags.append(f"Video metadata error: {e}")
+    finally:
+        if cap is not None:
+            cap.release()
 
     return {
         "metadata": meta,
