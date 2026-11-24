@@ -39,6 +39,12 @@ def test_magic_bytes_disguised_executable():
     assert not valid
     assert "executable" in reason.lower()
 
+    # macOS Mach-O 64-bit binary and shebang script renamed to .jpg
+    for header in (b"\xcf\xfa\xed\xfe\x07\x00\x00\x01", b"#!/bin/sh\nrm -rf /"):
+        valid, reason = validate_file_magic_bytes(header, "jpg")
+        assert not valid
+        assert "prohibited binary format" in reason.lower()
+
 
 def test_magic_bytes_mismatch_extension():
     # A JPEG file renamed with .pdf extension
