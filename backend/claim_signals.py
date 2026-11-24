@@ -14,23 +14,27 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 try:
     from backend.risk_scorer import (
+        BayesianCostSensitiveDecisionEngine,
         BehavioralRiskDecayEngine,
         DeviceGeoAnomalyDetector,
         EntityCollusionDetector,
         ForensicEventTimelineAligner,
         ModalConflictDetector,
         PerceptualHashCollisionDetector,
+        RiskPopulationDriftMonitor,
         SyntheticIdentityScorer,
         TransactionVelocityTracker,
     )
 except ImportError:
     from risk_scorer import (
+        BayesianCostSensitiveDecisionEngine,
         BehavioralRiskDecayEngine,
         DeviceGeoAnomalyDetector,
         EntityCollusionDetector,
         ForensicEventTimelineAligner,
         ModalConflictDetector,
         PerceptualHashCollisionDetector,
+        RiskPopulationDriftMonitor,
         SyntheticIdentityScorer,
         TransactionVelocityTracker,
     )
@@ -121,6 +125,23 @@ class DocumentHashItem(BaseModel):
         return cleaned
 
 
+class CostDecisionInput(BaseModel):
+    fraud_probability: Score
+    transaction_amount: Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+    customer_lifetime_value: Optional[Annotated[float, Field(ge=0.0, allow_inf_nan=False)]] = None
+    chargeback_fee: Optional[Annotated[float, Field(ge=0.0, allow_inf_nan=False)]] = None
+    review_operational_cost: Optional[Annotated[float, Field(ge=0.0, allow_inf_nan=False)]] = None
+    policy_mode: Annotated[
+        str, Field(pattern="^(BALANCED|AGGRESSIVE_GROWTH|STRICT_FRAUD_CONTROL)$")
+    ] = "BALANCED"
+
+
+class PopulationDriftInput(BaseModel):
+    reference_scores: List[Score] = Field(min_length=2, max_length=MAX_SIGNAL_ROWS)
+    current_scores: List[Score] = Field(min_length=2, max_length=MAX_SIGNAL_ROWS)
+    num_bins: Annotated[int, Field(ge=2, le=20)] = 10
+
+
 class ClaimSignalsRequest(BaseModel):
     events: List[ClaimEvent] = Field(default_factory=list, max_length=MAX_SIGNAL_ROWS)
     entities: List[ClaimEntity] = Field(default_factory=list, max_length=MAX_SIGNAL_ROWS)
@@ -129,6 +150,8 @@ class ClaimSignalsRequest(BaseModel):
     identities: List[IdentityProfile] = Field(default_factory=list, max_length=MAX_SIGNAL_ROWS)
     timeline: Optional[TimelineInput] = None
     hashes: List[DocumentHashItem] = Field(default_factory=list, max_length=MAX_SIGNAL_ROWS)
+    decision: Optional[CostDecisionInput] = None
+    drift: Optional[PopulationDriftInput] = None
     as_of: Optional[Timestamp] = None
 
     def is_empty(self) -> bool:
@@ -140,6 +163,8 @@ class ClaimSignalsRequest(BaseModel):
             or self.identities
             or self.timeline
             or self.hashes
+            or self.decision
+            or self.drift
         )
 
 
@@ -275,6 +300,31 @@ def _hashes(hashes: List[DocumentHashItem]) -> Optional[List[Dict[str, Any]]]:
     return sorted(scans, key=lambda item: (-item["duplicate_risk_score"], -item["collision_count"]))
 
 
+def _decision(decision: Optional[CostDecisionInput]) -> Optional[Dict[str, Any]]:
+    if decision is None:
+        return None
+    engine = BayesianCostSensitiveDecisionEngine(policy_mode=decision.policy_mode)
+    return engine.evaluate_transaction(
+        fraud_probability=decision.fraud_probability,
+        transaction_amount=decision.transaction_amount,
+        customer_lifetime_value=decision.customer_lifetime_value,
+        chargeback_fee=decision.chargeback_fee,
+        review_operational_cost=decision.review_operational_cost,
+        policy_override=decision.policy_mode,
+    )
+
+
+def _drift(drift: Optional[PopulationDriftInput]) -> Optional[Dict[str, Any]]:
+    if drift is None:
+        return None
+    monitor = RiskPopulationDriftMonitor(default_bins=drift.num_bins)
+    return monitor.evaluate_drift(
+        reference_scores=drift.reference_scores,
+        current_scores=drift.current_scores,
+        num_bins=drift.num_bins,
+    )
+
+
 def evaluate_claim_signals(request: ClaimSignalsRequest) -> Dict[str, Any]:
     events = sorted(request.events, key=lambda event: event.timestamp)
     return {
@@ -291,4 +341,6 @@ def evaluate_claim_signals(request: ClaimSignalsRequest) -> Dict[str, Any]:
         "identities": _identities(request.identities),
         "timeline": _timeline(request.timeline),
         "hashes": _hashes(request.hashes),
+        "decision": _decision(request.decision),
+        "drift": _drift(request.drift),
     }
