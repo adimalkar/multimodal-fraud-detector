@@ -60,6 +60,9 @@ def test_sections_without_input_are_null_rather_than_clean(client):
     assert data["travel"] is None
     assert data["network"] is None
     assert data["history"] is None
+    assert data["identities"] is None
+    assert data["timeline"] is None
+    assert data["hashes"] is None
     assert data["conflict"]["conflict_tier"] == "CONGRUENT"
 
 
@@ -115,3 +118,61 @@ def test_durable_mode_requires_a_tenant(client, monkeypatch):
     authorized = client.post("/api/claims/signals", json=payload,
                              headers={"Authorization": "Bearer " + "t" * 32})
     assert authorized.status_code == 200
+
+
+def test_identity_timeline_and_hash_signals_run_statelessly(client):
+    response = client.post("/api/claims/signals", json={
+        "identities": [
+            {"entity_id": "c-clean", "name": "Alice Walker", "email": "alice.walker@gmail.com",
+             "phone_carrier": "MOBILE", "account_age_days": 365},
+            {"entity_id": "c-synth", "name": "Alice Walker", "email": "z9q7k4x2@mailinator.com",
+             "phone_carrier": "VOIP", "account_age_days": 0},
+        ],
+        "timeline": {
+            "incident_time": BASE_TS,
+            "filing_time": BASE_TS + 3600,
+            "evidence_events": [
+                {"event_id": "img-old", "event_type": "PHOTO", "timestamp": BASE_TS - 72 * 3600,
+                 "lat": 40.7128, "lon": -74.0060},
+                {"event_id": "img-far", "event_type": "PHOTO", "timestamp": BASE_TS + 600,
+                 "lat": 25.7617, "lon": -80.1918},
+                {"event_id": "inv-early", "event_type": "INVOICE", "timestamp": BASE_TS - 12 * 3600},
+            ],
+        },
+        "hashes": [
+            {"entity_id": "c-2", "image_id": "doc-b", "phash": "0x0f0f0f0f0f0f0f0e", "timestamp": BASE_TS + 120},
+            {"entity_id": "c-1", "image_id": "doc-a", "phash": "0f0f0f0f0f0f0f0f", "timestamp": BASE_TS},
+        ],
+    })
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["velocity"] is None
+    assert len(data["identities"]) == 2
+    assert data["identities"][0]["entity_id"] == "c-synth"
+    assert data["identities"][0]["risk_tier"] == "CRITICAL_SYNTHETIC_FRAUD"
+    assert data["identities"][1]["entity_id"] == "c-clean"
+    assert data["identities"][1]["risk_tier"] == "LOW_RISK"
+
+    assert data["timeline"]["severity_tier"] == "CRITICAL_FRAUD"
+    assert any("CAUSALITY_INVERSION" in f for f in data["timeline"]["flags"])
+    assert any("PRE_EXISTING_DAMAGE_PHOTO_RECYCLING" in f for f in data["timeline"]["flags"])
+
+    # Evaluated chronologically: doc-a baseline (unique), doc-b collides cross-entity (highest risk first)
+    assert data["hashes"][0]["image_id"] == "doc-b"
+    assert data["hashes"][0]["duplicate_detected"] is True
+    assert data["hashes"][0]["nearest_collision_distance"] == 1
+    assert data["hashes"][1]["image_id"] == "doc-a"
+    assert data["hashes"][1]["duplicate_detected"] is False
+
+
+@pytest.mark.parametrize("payload", [
+    {"identities": [{"name": "Test User", "email": "not-an-email"}]},
+    {"timeline": {"incident_time": BASE_TS, "evidence_events": [
+        {"event_id": "ev-1", "event_type": "PHOTO", "timestamp": BASE_TS, "lat": 40.7}
+    ]}},
+    {"hashes": [{"entity_id": "e-1", "image_id": "img-1", "phash": "not-hex-zzzz"}]},
+    {"hashes": [{"entity_id": "e-1", "image_id": "img-1", "phash": "0" * 19}]},
+])
+def test_invalid_forensic_signal_inputs_return_422(client, payload):
+    assert client.post("/api/claims/signals", json=payload).status_code == 422
