@@ -60,7 +60,13 @@ def _png_size(path: Path) -> tuple[int, int]:
 
 
 def _words(tsv: bytes, width: int, height: int) -> tuple[int, list[dict], float | None]:
-    reader = csv.DictReader(io.StringIO(tsv.decode("utf-8", "replace")), delimiter="\t")
+    # Tesseract emits raw tab-separated tokens without CSV quoting; QUOTE_MINIMAL
+    # would treat a leading '"' as an open quote and swallow subsequent TSV rows.
+    reader = csv.DictReader(
+        io.StringIO(tsv.decode("utf-8", "replace")),
+        delimiter="\t",
+        quoting=csv.QUOTE_NONE,
+    )
     if not reader.fieldnames or not {"level", "left", "top", "width", "height", "conf", "text"}.issubset(reader.fieldnames):
         raise ValueError("Invalid OCR output")
     count = 0
