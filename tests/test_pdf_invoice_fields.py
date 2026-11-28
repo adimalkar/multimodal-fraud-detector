@@ -89,6 +89,18 @@ def test_scanned_invoice_uses_ocr_box_and_abstains_on_low_confidence(tmp_path):
     assert result["classification"] == "Unknown"
 
 
+@pytest.mark.skipif(not shutil.which("tesseract") or not shutil.which("pdftoppm"),
+                    reason="OCR system binaries unavailable")
+def test_scanned_invoice_with_quotes_preserves_all_lines(tmp_path):
+    result = _analyze(tmp_path, _scanned_pdf([
+        '"ACME Corp Invoice 2026"', "Subtotal: $10.00", "Tax: $2.50", "Total: $12.50"
+    ]))
+    task = result["task_results"][2]
+    assert task["state"] == "checked"
+    assert task["evidence"]["check"] == "match"
+    assert task["evidence"]["fields"]["total"][0]["value"] == "12.50"
+
+
 def test_unsupported_missing_and_repeated_amounts_abstain(tmp_path):
     unsupported = _analyze(tmp_path, _text_pdf(["Receipt", "Subtotal: $10.00",
                                                 "Tax: $2.00", "Total: $12.00"]))

@@ -153,3 +153,19 @@ def test_ocr_word_output_is_bounded_and_rejects_invalid_boxes():
 
     with pytest.raises(ValueError, match="geometry"):
         _words((header + "5\t99\t0\t20\t10\t95\tbad\n").encode(), 100, 100)
+
+
+def test_ocr_tsv_preserves_unquoted_double_quotes():
+    header = "level\tleft\ttop\twidth\theight\tconf\ttext\n"
+    rows = (
+        '5\t10\t10\t30\t12\t94\t"ACME\n'
+        '5\t50\t10\t30\t12\t92\tCorp\n'
+        '5\t10\t30\t40\t12\t96\tInvoice\n'
+        '5\t60\t30\t30\t12\t90\t2026"\n'
+        '5\t10\t50\t30\t12\t95\t12"\n'
+    )
+    count, reported, mean = _words((header + rows).encode(), 200, 200)
+    assert count == 5
+    assert [item["text"] for item in reported] == ['"ACME', "Corp", "Invoice", '2026"', '12"']
+    assert all(not item["text_capped"] for item in reported)
+    assert mean == 0.934
